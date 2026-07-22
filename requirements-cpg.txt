@@ -1,0 +1,26 @@
+# Vulcan Backend Requirements
+
+# Core Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# Database
+pymongo>=4.6.0
+motor>=3.3.0
+
+# Security
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+
+# Tree-sitter for CPG Parser (specific version for compatibility)
+tree-sitter==0.21.3
+tree-sitter-languages>=1.10.2
+setuptools
+
+# Development
+pytest>=7.4.0
+pytest-asyncio
+httpx
+python-dotenv

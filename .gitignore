@@ -1,0 +1,60 @@
+﻿# Environment variables
+.env
+
+# Python cache and metadata
+__pycache__/
+*.pyc
+*.cpython-313.pyc
+*venv
+.pytest_cache/
+tests/.tmp/
+
+# Local database
+vulcan.db
+.vulcan_cache/
+tests/.tmp/
+tests/.tmp_work/
+.pytest_cache/
+
+# OS generated files
+.DS_Store
+
+# VS Code settings (optional, keeps workspace settings local)
+.vscode/
+
+# CPG output files
+cpg_*.json
+
+graphify-out/*
+
+# Runtime upload folder
+repo_uploads/
+attestation_evidence/
+
+# Compiled tree-sitter binaries
+build/
+
+# Scratch / debug scripts (root level)
+UPGRADE_SUCCESS_REPORT.py
+check_api_keys.py
+demo_universal_parser.py
+verify_installation.py
+test_cpg_debug.py
+test_llm_providers.py
+enhanced.md
+verify.md
+Vulcan.pptm
+
+# Zip archives
+*.zip
+
+# Ad-hoc test/example directories
+test_files/
+test-apis/
+examples/
+docs/
+Document-MarkDowns/
+vuln-test-repo-25/
+# Machine-specific WSL dev workaround (HP Sure Click blocks native Windows sockets)
+start-wsl-dev.sh
+start-wsl-dev.ps1
