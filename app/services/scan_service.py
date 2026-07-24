@@ -688,6 +688,7 @@ class ScanService:
                     warnings=["Scan timed out — partial results only"],
                     errors=[], success=False,
                     config_findings=[], dependency_findings=[], dependency_control_result=None,
+                    capability_findings=[],
                 )
 
             rel_paths = [str(p.relative_to(repo_root)).replace("\\", "/") for p in files]
@@ -707,19 +708,14 @@ class ScanService:
                 severity = vuln.get("severity", "low")
                 by_severity[severity] = by_severity.get(severity, 0) + 1
 
-            # Build per-file graph data for UI (no LLM, graph only)
-            graph_files: dict[str, dict] = {}
+            # Per-file progress bookkeeping for the live scan UI. ControlGate has no
+            # graph-visualization page (that was Vulcan's CPG explorer, removed from
+            # the frontend) and no ASVS control reads scan.graph_data, so the full
+            # AST/CFG/DFG/CPG blob is not persisted here — for a real multi-service
+            # repo it can exceed MongoDB's 16MB per-document limit and fail the scan
+            # outright with no compliance benefit.
             file_map: dict[str, str] = {}
             file_order: list[str] = []
-            global_graph = repo_result.graph_data or {"nodes": [], "edges": []}
-
-            # Normalize global graph file paths to repo-relative for display
-            for node in global_graph.get("nodes", []):
-                props = node.get("properties") or {}
-                normalized = self._normalize_repo_path(repo_root, props.get("file"), rel_paths)
-                if normalized:
-                    props["file"] = normalized
-                    node["properties"] = props
 
             for i, file_path in enumerate(files):
                 rel_path = str(file_path.relative_to(repo_root)).replace("\\", "/")
@@ -733,9 +729,8 @@ class ScanService:
                         "files_scanned": i + 1,
                         "progress": 20 + int((i + 1) / max(len(files), 1) * 70),
                     },
-                    [f"[INFO] Preparing graph for {rel_path}..."],
+                    [f"[INFO] Scanning {rel_path}..."],
                 )
-                graph_files[file_id] = self._filter_graph_for_file(global_graph, repo_root, rel_path)
 
             # ASVS dynamic-probe controls (V12.1.1, V12.2.1, V12.2.2, V3.4.1, V13.4.1) —
             # opt-in: only runs when the user supplied a live deployment URL for this scan.
@@ -769,6 +764,7 @@ class ScanService:
                 "config_findings": repo_result.config_findings,
                 "dependency_findings": repo_result.dependency_findings,
                 "dependency_control_result": repo_result.dependency_control_result,
+                "capability_findings": repo_result.capability_findings,
                 "dynamic_probe_findings": dynamic_probe_findings,
             }
 
@@ -780,12 +776,7 @@ class ScanService:
                     "finished_at": datetime.utcnow().isoformat(),
                     "summary": summary,
                     "vulnerabilities": vulnerabilities,
-                    "graph_data": {
-                        "files": graph_files,
-                        "file_map": file_map,
-                        "file_order": file_order,
-                        "global": global_graph,
-                    },
+                    "graph_data": {"file_map": file_map, "file_order": file_order},
                 },
                 [f"[SUCCESS] Repository scan completed in {duration:.2f}s"],
             )
@@ -877,7 +868,7 @@ class ScanService:
             "duration_seconds": summary.get("duration_seconds", 0.0),
             "created_at": _to_iso(summary.get("created_at", scan.get("created_at"))),
             "completed_at": _to_iso(summary.get("completed_at", scan.get("finished_at"))),
-            "vulnerabilities": vulnerabilities,
+            "vulnerabilities": summary.get("vulnerabilities", []),
         }
         return ScanSummary(**merged)
 

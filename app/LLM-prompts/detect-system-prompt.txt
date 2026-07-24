@@ -97,6 +97,12 @@ You must classify vulnerabilities from the OWASP Top 10 and common API-level fla
 **Invented Vulnerability Types:**
 - Do NOT generate vulnerability types that are not real security categories. Never output types like "Path Discovery", "Information Disclosure via Path", or other invented names. Stick to the standard vulnerability categories listed in the Detection Scope above.
 
+**Sensitive Data Exposure:**
+- An endpoint returning only the data it exists to return is SAFE, even if that data is itself a credential.
+  - SAFE: a token-refresh endpoint (`POST /auth/refresh`) responding with `{ accessToken: newAccessToken }` — issuing a fresh access token is that endpoint's entire purpose, not an exposure.
+  - SAFE: a login endpoint returning the session token it just created for the authenticated user.
+  - VULNERABLE: an endpoint returning a token/secret belonging to a *different* user, or returning internal fields (password hashes, other users' data) that weren't asked for.
+
 ### Rules:
 - Do not hallucinate hidden context — evaluate only what is visible.
 - If uncertain, say "Not enough evidence".

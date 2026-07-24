@@ -223,9 +223,15 @@ class TestInsecureCookiePatterns:
         code = "set_cookie('session', token)"
         assert matches_any(get_patterns(self.RULE), code)
 
-    def test_set_cookie_with_secure_true_not_detected(self):
-        code = "set_cookie('session', token, secure=True)"
+    def test_set_cookie_with_secure_and_httponly_not_detected(self):
+        code = "set_cookie('session', token, secure=True, httponly=True)"
         assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_set_cookie_with_secure_only_missing_httponly_detected(self):
+        # Broadened Phase-3 coverage: secure alone isn't enough to call a cookie safe —
+        # a missing HttpOnly flag still leaves the cookie readable (and stealable) via XSS.
+        code = "set_cookie('session', token, secure=True)"
+        assert matches_any(get_patterns(self.RULE), code)
 
     def test_res_cookie_without_secure_detected(self):
         code = "res.cookie('auth', value)"

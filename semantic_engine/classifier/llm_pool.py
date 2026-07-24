@@ -16,6 +16,9 @@ Three fixed roles, each with a tailored model priority list:
   patch      – quality-first; runs once per approved patch request
                DeepSeek-V3 → gpt-4.1 → Llama-4-Maverick-FP8 → Groq llama-3.3 → o4-mini
 
+  report     – prose quality; runs once per ASVS compliance PDF export
+               gpt-4o → gpt-4.1 → Groq llama-3.3
+
   All models use GitHub Models free tier (GITHUB_LLM_API_KEY) or Groq free tier (GROQ_API_KEY).
   Groq Compound (exploit/CRITICAL) is paid — billed per token + per web-search request.
 
@@ -87,6 +90,12 @@ ROLE_DEFAULTS: dict[str, list[dict]] = {
         {"provider": "groq",   "model": "meta-llama/llama-4-scout-17b-16e-instruct", "key_env": "LLM_API_KEY"},
         {"provider": "groq",   "model": "llama-3.3-70b-versatile",                  "key_env": "LLM_API_KEY"},
         {"provider": "github", "model": "openai/o4-mini",                           "key_env": "GITHUB_LLM_API_KEY"},
+    ],
+    "report": [
+        # Prose quality matters more than speed here — runs once per PDF export.
+        {"provider": "github", "model": "gpt-4o",                                   "key_env": "GITHUB_LLM_API_KEY"},
+        {"provider": "github", "model": "openai/gpt-4.1",                           "key_env": "GITHUB_LLM_API_KEY"},
+        {"provider": "groq",   "model": "llama-3.3-70b-versatile",                  "key_env": "LLM_API_KEY"},
     ],
 }
 

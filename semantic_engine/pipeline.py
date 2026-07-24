@@ -14,6 +14,7 @@ from pathlib import Path
 from app.schemas.graph import SemanticGraph
 from app.domain.analysis.semantic_graph_builder import SemanticGraphBuilder
 from app.domain.analysis.config_inspector import ConfigInspector
+from app.domain.analysis.capability_checker import CapabilityChecker
 from app.services.dependency_scanner import DependencyScanner
 
 from semantic_engine.query_store.loader import get_query_store, QueryRule
@@ -93,6 +94,9 @@ class AnalysisResult:
     dependency_findings: List[Dict[str, Any]] = field(default_factory=list)
     dependency_control_result: Optional[Dict[str, Any]] = None
 
+    # ASVS "is X implemented (correctly)?" capability-check findings - repo scans only
+    capability_findings: List[Dict[str, Any]] = field(default_factory=list)
+
 
 class SemanticPipeline:
     """
@@ -117,6 +121,7 @@ class SemanticPipeline:
         )
         self.classifier = get_classifier(enable_llm=self.config.enable_llm)
         self.config_inspector = ConfigInspector()
+        self.capability_checker = CapabilityChecker()
         self.dependency_scanner = DependencyScanner()
 
         logger.info(f"SemanticPipeline initialized (LLM: {self.config.enable_llm})")
@@ -400,6 +405,16 @@ class SemanticPipeline:
             config_map = await asyncio.to_thread(self._collect_config_files, repo_path)
             config_findings = [asdict(f) for f in self.config_inspector.inspect(config_map)] if config_map else []
 
+            # ASVS "is X implemented (correctly)?" capability checks (V6.2.2, V6.2.3, V6.2.4,
+            # V6.3.1, V6.4.1, V7.2.4, V7.4.1, V7.4.2, V14.3.1) — LLM-judged, never blocks the
+            # scan if it fails.
+            capability_findings: list[dict] = []
+            try:
+                capability_results = await self.capability_checker.check(regex_source_map)
+                capability_findings = [asdict(f) for f in capability_results]
+            except Exception as exc:
+                logger.warning(f"Capability check failed (non-blocking): {exc}")
+
             # ASVS dependency-scan control (V15.2.1) — network calls to OSV.dev, so
             # wrapped in its own timeout: a slow/unreachable network degrades this
             # one control to not_tested rather than stalling the whole scan.
@@ -441,6 +456,7 @@ class SemanticPipeline:
                 config_findings=config_findings,
                 dependency_findings=dependency_findings,
                 dependency_control_result=dependency_control_result,
+                capability_findings=capability_findings,
             )
         except Exception as e:
             logger.error(f"Repository analysis failed: {e}", exc_info=True)

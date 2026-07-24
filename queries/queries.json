@@ -928,9 +928,7 @@
     ],
     "sources": [],
     "sinks": [],
-    "patterns": [
-      "IF(password == input) OR IF(token == input)"
-    ],
+    "patterns": [],
     "dangerous_comparisons": [
       "==",
       "!="
@@ -939,7 +937,11 @@
       "hmac.compare_digest",
       "secrets.compare_digest"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:password|token|secret|hash|hmac|signature|api_key)\\s*==\\s*\\w",
+      "\\w\\s*==\\s*(?:self\\.)?(?:password|token|secret|hash|hmac|signature|api_key)\\b"
+    ]
   },
   "EVAL_CODE_INJECTION": {
     "rule_id": "EVAL_CODE_INJECTION",
@@ -1373,7 +1375,9 @@
     "patterns": [],
     "regex_patterns": [
       "set_cookie\\((?![^)]*secure\\s*=\\s*True)[^)]+\\)",
-      "res\\.cookie\\((?![^)]*(?:secure\\s*:\\s*true|secure\\s*=\\s*True))[^)]+\\)"
+      "res\\.cookie\\((?![^)]*(?:secure\\s*:\\s*true|secure\\s*=\\s*True))[^)]+\\)",
+      "set_cookie\\((?![^)]*httponly\\s*=\\s*True)[^)]+\\)",
+      "Set-Cookie[\\\"']?\\s*:\\s*[\\\"'][^\\\"']*(?!.*Secure)[^\\\"']*[\\\"']"
     ],
     "sanitizers": [
       "secure=True",
@@ -1382,31 +1386,6 @@
     "confidence": "low",
     "asvs_controls": [
       "V3.3.1"
-    ]
-  },
-  "SESSION_FIXATION": {
-    "rule_id": "SESSION_FIXATION",
-    "name": "Session Fixation Vulnerability",
-    "owasp": "A07",
-    "cwe": "CWE-384",
-    "description": "Session ID not regenerated after authentication",
-    "severity": "medium",
-    "languages": [
-      "python",
-      "javascript",
-      "typescript"
-    ],
-    "sources": [],
-    "sinks": [],
-    "patterns": [],
-    "required_after_login": [
-      "session.regenerate",
-      "session.rotate"
-    ],
-    "sanitizers": [],
-    "confidence": "low",
-    "asvs_controls": [
-      "V7.2.4"
     ]
   },
   "PASSWORD_IN_URL": {
@@ -1681,7 +1660,12 @@
       "X-Frame-Options"
     ],
     "sanitizers": [],
-    "confidence": "medium"
+    "confidence": "medium",
+    "regex_patterns": [
+      "X-Frame-Options[\\\"']?\\s*[:,]\\s*[\\\"']?ALLOWALL",
+      "frame_options\\s*=\\s*[\\\"']?ALLOWALL",
+      "XFrameOptionsMiddleware.{0,80}#.*disable"
+    ]
   },
   "USE_OF_HARD_CODED_IV": {
     "rule_id": "USE_OF_HARD_CODED_IV",
@@ -1743,6 +1727,10 @@
     "confidence": "medium",
     "asvs_controls": [
       "V7.2.3"
+    ],
+    "regex_patterns": [
+      "(?:token|session_id|secret_key|otp|reset_code|csrf_token|api_key)\\s*=\\s*.*(?:random\\.choice|random\\.randint)\\b",
+      "(?:token|session_id|secret_key|otp|reset_code|csrf_token|api_key)\\s*=\\s*.*Math\\.random\\b"
     ]
   },
   "RACE_CONDITION_FILE": {
@@ -1765,7 +1753,11 @@
     "sanitizers": [
       "fcntl.flock"
     ],
-    "confidence": "low"
+    "confidence": "low",
+    "regex_patterns": [
+      "os\\.path\\.exists\\([^)]*\\)[\\s\\S]{0,150}?open\\(",
+      "os\\.access\\([^)]*\\)[\\s\\S]{0,150}?open\\("
+    ]
   },
   "VULNERABLE_COMPONENTS": {
     "rule_id": "VULNERABLE_COMPONENTS",
@@ -1789,15 +1781,10 @@
     ],
     "file_patterns": [
       "(?i)(^|/)requirements(?:[-_].+)?\\.txt$",
-      "(?i)(^|/)pipfile(\\.lock)?$",
+      "(?i)(^|/)pipfile$",
       "(?i)(^|/)pyproject\\.toml$",
-      "(?i)(^|/)poetry\\.lock$",
       "(?i)(^|/)setup\\.cfg$",
-      "(?i)(^|/)package\\.json$",
-      "(?i)(^|/)package-lock\\.json$",
-      "(?i)(^|/)npm-shrinkwrap\\.json$",
-      "(?i)(^|/)yarn\\.lock$",
-      "(?i)(^|/)pnpm-lock\\.yaml$"
+      "(?i)(^|/)package\\.json$"
     ],
     "confidence": "medium"
   },
@@ -1818,13 +1805,16 @@
     "patterns": [],
     "regex_patterns": [
       "(?i)@app\\.route\\([^)]*?/admin",
-      "(?i)@router\\.get\\([^)]*?/admin",
-      "(?i)app\\.(get|post|put|delete)\\([^)]*?/admin"
+      "(?i)@router\\.(get|post|put|delete|patch)\\([^)]*?/admin",
+      "(?i)app\\.(get|post|put|delete|patch)\\([^)]*?/admin",
+      "(?i)router\\.(get|post|put|delete|patch)\\([^)]*?/admin",
+      "(?i)path\\([\\\"'][^\\\"']*admin",
+      "(?i)@(Get|Post|Put|Delete|Patch)\\([\\\"'][^\\\"']*admin"
     ],
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx)$"
     ],
-    "confidence": "low",
+    "confidence": "medium",
     "asvs_controls": [
       "V8.2.1"
     ]
@@ -2248,7 +2238,8 @@
       "<script[^>]*>[^<]*\\{\\{[^}]*\\|\\s*safe",
       "innerHTML\\s*=\\s*[\\\"'`]\\s*<script",
       "JSON\\.parse\\(\\s*[\\\"'`]\\s*\\+",
-      "render_template_string\\([^)]*\\+"
+      "render_template_string\\([^)]*\\+",
+      "json\\.loads\\([^)]*\\+"
     ],
     "rule_id": "JS_JSON_INJECTION"
   },
@@ -2275,11 +2266,16 @@
       "sanitize-html",
       "sanitizeHtml"
     ],
-    "confidence": "low",
+    "confidence": "medium",
     "regex_patterns": [
       "dangerouslySetInnerHTML",
       "\\.innerHTML\\s*=\\s*[^;]+",
-      "mark_safe\\("
+      "mark_safe\\(",
+      "v-html\\s*=",
+      "\\[innerHTML\\]\\s*=",
+      "bypassSecurityTrustHtml\\(",
+      "\\|\\s*safe\\b",
+      "Markup\\("
     ],
     "rule_id": "MISSING_HTML_SANITIZER"
   },
@@ -2311,7 +2307,12 @@
       "import\\s+xml\\.etree\\.ElementTree",
       "lxml\\.etree\\.XMLParser\\(",
       "xml\\.sax\\.make_parser",
-      "resolve_entities\\s*=\\s*True"
+      "resolve_entities\\s*=\\s*True",
+      "xml\\.dom\\.minidom",
+      "xml\\.dom\\.expatbuilder",
+      "xmlrpc\\.client",
+      "etree\\.parse\\(",
+      "etree\\.fromstring\\("
     ],
     "rule_id": "XXE_UNSAFE_XML_PARSER"
   },
@@ -2344,7 +2345,10 @@
     "confidence": "low",
     "regex_patterns": [
       "request\\.(?:get_json|form|args)\\s*\\[",
-      "req\\.(?:body|query|params)\\s*\\["
+      "req\\.(?:body|query|params)\\s*\\[",
+      "request\\.(?:get_json\\(\\)|form|args)\\.get\\(",
+      "request\\.(?:POST|GET)\\.get\\(",
+      "req\\.(?:body|query|params)\\.\\w+"
     ],
     "rule_id": "INPUT_VALIDATION_MISSING"
   },
@@ -2369,7 +2373,9 @@
     "regex_patterns": [
       "<input[^>]*pattern=[\\\"']",
       "\\.checkValidity\\(\\)",
-      "reportValidity\\(\\)"
+      "reportValidity\\(\\)",
+      "<input[^>]*(?:minlength|maxlength|min|max)=[\\\"']",
+      "\\.setCustomValidity\\("
     ],
     "rule_id": "CLIENT_SIDE_ONLY_VALIDATION"
   },
@@ -2398,7 +2404,8 @@
     "regex_patterns": [
       "\\.innerHTML\\s*=\\s*(?!['\\\"]{2}\\s*;)",
       "document\\.write\\s*\\(",
-      "\\.outerHTML\\s*=\\s*"
+      "\\.outerHTML\\s*=\\s*",
+      "\\$\\([^)]*\\)\\.html\\("
     ],
     "rule_id": "UNSAFE_DOM_RENDERING"
   },
@@ -2426,11 +2433,15 @@
       "X-CSRF-Token",
       "SameSite=Strict"
     ],
-    "confidence": "low",
+    "confidence": "medium",
     "regex_patterns": [
       "@csrf_exempt",
       "CSRF_ENABLED\\s*=\\s*False",
-      "WTF_CSRF_ENABLED\\s*=\\s*False"
+      "WTF_CSRF_ENABLED\\s*=\\s*False",
+      "csrf\\(\\s*\\{\\s*ignoreMethods",
+      "skip_before_action\\s*:\\s*verify_authenticity_token",
+      "\\[IgnoreAntiforgeryToken\\]",
+      "csrf_protect\\s*=\\s*False"
     ],
     "rule_id": "MISSING_CSRF_PROTECTION"
   },
@@ -2455,7 +2466,10 @@
     "confidence": "low",
     "regex_patterns": [
       "allow_headers\\s*=\\s*\\[\\s*[\\\"']\\*[\\\"']\\s*\\]",
-      "Content-Type[\\\"']?\\s*:\\s*[\\\"']text/plain[\\\"']"
+      "Content-Type[\\\"']?\\s*:\\s*[\\\"']text/plain[\\\"']",
+      "Access-Control-Allow-Headers[\\\"']?\\s*:\\s*[\\\"']\\*",
+      "CORS\\([^)]*resources\\s*=\\s*[^)]*\\*",
+      "origin\\s*:\\s*true[^}]*credentials\\s*:\\s*true"
     ],
     "rule_id": "CORS_PREFLIGHT_BYPASS"
   },
@@ -2479,8 +2493,10 @@
     "sanitizers": [],
     "confidence": "low",
     "regex_patterns": [
-      "@app\\.route\\([^)]*(?:delete|update|transfer|admin|reset)[^)]*methods\\s*=\\s*\\[[^\\]]*[\\\"']GET[\\\"']",
-      "router\\.get\\([\\\"'][^\\\"']*(?:delete|remove|update|transfer)[^\\\"']*[\\\"']"
+      "@app\\.route\\([^)]*(?:delete|update|transfer|admin|reset|approve|cancel|revoke|grant|ban)[^)]*methods\\s*=\\s*\\[[^\\]]*[\\\"']GET[\\\"']",
+      "router\\.get\\([\\\"'][^\\\"']*(?:delete|remove|update|transfer|approve|cancel|revoke|grant|ban)[^\\\"']*[\\\"']",
+      "app\\.get\\([\\\"'][^\\\"']*(?:delete|remove|update|transfer|approve|cancel|revoke|grant|ban)[^\\\"']*[\\\"']",
+      "path\\([\\\"'][^\\\"']*(?:delete|remove|update|transfer|approve|cancel|revoke|grant|ban)[^\\\"']*[\\\"'][^)]*\\)\\s*#.*GET"
     ],
     "rule_id": "UNSAFE_HTTP_METHOD_FOR_SENSITIVE_ACTION"
   },
@@ -2530,7 +2546,7 @@
     "confidence": "medium",
     "regex_patterns": [
       "min_length\\s*=\\s*[0-7]\\b",
-      "minLength[\\\"']?\\s*:\\s*[0-7]\\b",
+      "(?i)password[\\\"']?\\s*:\\s*\\{[^}]*?minLength[\\\"']?\\s*:\\s*[0-7]\\b",
       "password.{0,20}len(?:gth)?\\(?\\)?\\s*[<>=]+\\s*[0-7]\\b"
     ],
     "rule_id": "WEAK_PASSWORD_MIN_LENGTH"
@@ -2657,7 +2673,8 @@
     "sanitizers": [],
     "confidence": "medium",
     "regex_patterns": [
-      "<input(?![^>]*type=[\\\"']password[\\\"'])[^>]*(?:id|name)=[\\\"']password[\\\"']"
+      "(?i)<input(?![^>]*type=(?:[\\\"']password[\\\"']|\\{[^}]*[\\\"']password[\\\"'][^}]*\\}))[^>]*(?:id|name)=[\\\"']password[\\\"']",
+      "(?i)<input(?![^>]*type=(?:[\\\"']password[\\\"']|\\{[^}]*[\\\"']password[\\\"'][^}]*\\}))[^>]*(?:id|name)=[\\\"'][^\\\"']*(?:password|pwd)[^\\\"']*[\\\"']"
     ],
     "rule_id": "PASSWORD_FIELD_NOT_MASKED"
   },
@@ -2897,7 +2914,10 @@
     "regex_patterns": [
       "v-if=[\\\"'](?:isAdmin|hasRole)",
       "\\{isAdmin\\s*&&",
-      "if\\s*\\(\\s*(?:user\\.role|currentUser\\.role|isAdmin)[^)]*\\)\\s*\\{\\s*(?:document\\.|\\.style\\.|\\.hidden)"
+      "if\\s*\\(\\s*(?:user\\.role|currentUser\\.role|isAdmin)[^)]*\\)\\s*\\{\\s*(?:document\\.|\\.style\\.|\\.hidden)",
+      "\\*ngIf=[\\\"'](?:isAdmin|hasRole)",
+      "v-show=[\\\"'](?:isAdmin|hasRole)",
+      "\\{\\s*(?:user|currentUser)\\.role\\s*===?\\s*[\\\"']admin[\\\"']\\s*&&"
     ],
     "rule_id": "CLIENT_SIDE_AUTHORIZATION_ONLY"
   },

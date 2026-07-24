@@ -579,14 +579,18 @@ class SliceClassifier:
                 return True
             if self._SENDFILE_ROOT_SAFE.search(code) or self._NORMALIZE_PREFIX_STRIP.search(code):
                 return True
-        if rule_id == "PATH_DISCOVERY":
-            # IDOR: ownership/access-control check visible in snippet
+        if rule_id in ("PATH_DISCOVERY", "BROKEN_ACCESS_CONTROL", "INPUT_VALIDATION_MISSING"):
+            # IDOR / missing-validation: an ownership, role, or equality guard is visible
+            # in the same snippet. Covers both snake_case (Flask/Django-style: user_id !=)
+            # and camelCase (Express/Node-style: req.user.userId !==, .role !==) idioms —
+            # a manual comparison guard is real validation even without a schema library.
             if re.search(
                 r'\b(?:current_user(?:_id)?|owner_id|user_id\s*!=|'
-                r'owner_id\s*:\s*current)',
+                r'owner_id\s*:\s*current|userId\s*!==?|req\.user\.\w+\s*!==?|\.role\s*!==?)',
                 code, re.IGNORECASE,
             ):
                 return True
+        if rule_id == "PATH_DISCOVERY":
             # Safe deserialization: SafeLoader / defusedxml
             if re.search(r'\bSafeLoader\b', code):
                 return True

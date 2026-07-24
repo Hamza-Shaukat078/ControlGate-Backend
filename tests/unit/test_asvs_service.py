@@ -106,6 +106,45 @@ class TestStaticCodeMerge:
         assert r["llm_explanation"] == "verify_exp disabled"
 
     @pytest.mark.asyncio
+    async def test_unconfirmed_fallback_only_hit_becomes_manual_review(self):
+        # Regression: when the LLM was rate-limited/unavailable for every matching
+        # slice, the classifier's static-only fallback used to be trusted as a
+        # confident "fail" — a guess with no real confirmation. It should now
+        # surface as manual_review instead of silently asserting a failure.
+        summary = _summary(vulnerabilities=[{
+            "type": "SQL Injection", "asvs_controls": ["V1.2.4"], "confidence": 0.65,
+            "location": {"file": "database.js", "start_line": 17},
+            "analysis": {"llm_classification": {"explanation": "LLM unavailable — pattern-based detection only"}},
+        }])
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        results = await svc.build_results_for_scan("scan-1")
+        r = results["V1.2.4"]
+        assert r["verdict"] == "manual_review"
+        assert "could not confirm" in r["llm_explanation"]
+
+    @pytest.mark.asyncio
+    async def test_confirmed_hit_still_fails_even_alongside_unconfirmed_ones(self):
+        # A real LLM-confirmed finding must still fail the control, regardless of
+        # whether other unconfirmed static-only matches also exist for it.
+        summary = _summary(vulnerabilities=[
+            {
+                "type": "SQL Injection", "asvs_controls": ["V1.2.4"], "confidence": 0.65,
+                "location": {"file": "database.js", "start_line": 17},
+                "analysis": {"llm_classification": {"explanation": "LLM cap reached — static analysis only"}},
+            },
+            {
+                "type": "SQL Injection", "asvs_controls": ["V1.2.4"], "confidence": 0.9,
+                "location": {"file": "app.py", "start_line": 30},
+                "analysis": {"llm_classification": {"explanation": "Untrusted input concatenated into SQL string"}},
+            },
+        ])
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        results = await svc.build_results_for_scan("scan-1")
+        r = results["V1.2.4"]
+        assert r["verdict"] == "fail"
+        assert r["evidence"][0]["file"] == "app.py"
+
+    @pytest.mark.asyncio
     async def test_no_finding_on_vulnerable_polarity_rule_passes(self):
         # V1.2.4 (SQL injection) is a vulnerable-polarity rule with full coverage;
         # no matching finding means the rule ran across the repo and found nothing.

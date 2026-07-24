@@ -177,11 +177,15 @@ class QueryExecutor:
                 if not any(rx.search(normalized) for rx in compiled_filters):
                     continue
             lines = code.split("\n")
+            # See the matching comment in _extract_slice: guard/validation checks for
+            # these rules conventionally sit a few lines below the flagged call.
+            _WIDE_CONTEXT_RULES = {"BROKEN_ACCESS_CONTROL", "INPUT_VALIDATION_MISSING"}
+            regex_context = 10 if query.rule_id in _WIDE_CONTEXT_RULES else 2
             for pattern in patterns:
                 try:
                     for match in re.finditer(pattern, code):
                         line_num = code[:match.start()].count("\n") + 1
-                        snippet = self._extract_code_snippet(code, {line_num}, context=2)
+                        snippet = self._extract_code_snippet(code, {line_num}, context=regex_context)
                         slice_id = f"{query.rule_id}_REGEX_{file_path}_{line_num}"
                         slices.append(CodeSlice(
                             slice_id=slice_id,
@@ -625,8 +629,15 @@ class QueryExecutor:
         file_path = (source_node.file or sink_node.file or "input")
         file_source = self._resolve_file_source(file_path, source_code, source_code_map)
 
-        # Extract code snippet with context (+/-3 lines).
-        snippet = self._extract_code_snippet(file_source, line_numbers, context=3)
+        # Extract code snippet with context (+/-3 lines). Authorization/validation
+        # guards for these rules are conventionally written as an early-return check
+        # right after the flagged call, often 4-8 lines below it (e.g. IDOR ownership
+        # checks, manual input-validation comparisons) — a wider window gives the
+        # classifier a real chance to see the guard instead of judging the call in
+        # isolation. Other rules keep the tighter default to avoid bloating snippets.
+        _WIDE_CONTEXT_RULES = {"BROKEN_ACCESS_CONTROL", "INPUT_VALIDATION_MISSING"}
+        context = 10 if query.rule_id in _WIDE_CONTEXT_RULES else 3
+        snippet = self._extract_code_snippet(file_source, line_numbers, context=context)
         if not snippet and (source_node.source_code or sink_node.source_code):
             # Fallback: use node source_code if we couldn't map lines to file
             parts = []

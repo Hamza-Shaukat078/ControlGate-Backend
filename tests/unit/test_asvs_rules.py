@@ -112,8 +112,17 @@ class TestInsecureWebsocket:
 
 class TestWeakPasswordMinLength:
     RULE = "WEAK_PASSWORD_MIN_LENGTH"
-    VULNERABLE = [("min_length = 4", "min_length below 8")]
-    SAFE = [("min_length = 12", "min_length at recommended 12")]
+    VULNERABLE = [
+        ("min_length = 4", "min_length below 8"),
+        ('password: {\n  type: "password",\n  minLength: 6,\n},', "JS password schema, minLength 6"),
+    ]
+    SAFE = [
+        ("min_length = 12", "min_length at recommended 12"),
+        # Regression: this used to fire on ANY field's minLength, not just password's —
+        # a product-name schema with minLength:3 was flagged as a weak password policy.
+        ('name: {\n  type: "string",\n  minLength: 3,\n},', "unrelated field (product name), not password"),
+        ('password: {\n  type: "password",\n  minLength: 8,\n},', "password minLength at the 8-char floor"),
+    ]
 
     @pytest.mark.parametrize("code,desc", VULNERABLE)
     def test_vulnerable(self, code, desc): assert fires(self.RULE, code), desc
@@ -139,7 +148,15 @@ class TestOverlyRestrictivePasswordComposition:
 class TestPasswordFieldNotMasked:
     RULE = "PASSWORD_FIELD_NOT_MASKED"
     VULNERABLE = [('<input type="text" id="password" name="password" />', "plaintext password field")]
-    SAFE = [('<input type="password" id="password" name="password" />', "masked password field")]
+    SAFE = [
+        ('<input type="password" id="password" name="password" />', "masked password field"),
+        # Regression: a compliant show/hide toggle uses a dynamic JSX type expression,
+        # which the old regex (literal type="password" only) couldn't recognize.
+        (
+            "<input id=\"password\" type={showPassword ? 'text' : 'password'} autoComplete=\"current-password\" />",
+            "JSX show/hide toggle, masked by default",
+        ),
+    ]
 
     @pytest.mark.parametrize("code,desc", VULNERABLE)
     def test_vulnerable(self, code, desc): assert fires(self.RULE, code), desc
@@ -247,13 +264,19 @@ class TestAsvsCatalogCoverage:
         assert len(CATALOG) == 70
 
     def test_every_static_code_control_has_a_rule(self):
+        # Controls answered by CapabilityChecker (app/domain/analysis/capability_checker.py)
+        # are a separate side-channel by design — they never go through the taint-engine
+        # rule catalog, so they're legitimately absent from queries.json.
+        from app.domain.analysis.capability_checker import _CAPABILITY_CHECKS
+        capability_checked = set(_CAPABILITY_CHECKS.keys())
+
         static_control_ids = {
             c["control_id"] for c in CATALOG if c["detection_strategy"] == "static_code"
         }
         covered = set()
         for rule in QUERIES.values():
             covered.update(rule.get("asvs_controls", []))
-        missing = static_control_ids - covered
+        missing = static_control_ids - covered - capability_checked
         assert not missing, f"static_code controls with no rule coverage: {sorted(missing)}"
 
     def test_relabeled_rules_still_have_original_cwe_metadata(self):
