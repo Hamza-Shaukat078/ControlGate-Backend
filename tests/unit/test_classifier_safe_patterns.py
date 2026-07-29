@@ -46,3 +46,59 @@ class TestOwnershipGuardRecognizedAcrossRules:
     def test_no_guard_present_is_not_marked_safe(self):
         assert not _classifier()._code_is_safe("BROKEN_ACCESS_CONTROL", self.NO_GUARD_SNIPPET)
         assert not _classifier()._code_is_safe("INPUT_VALIDATION_MISSING", self.NO_GUARD_SNIPPET)
+
+
+class TestReDoSSafePatternExtractsActualRegex:
+    """
+    Regression: the ReDoS/REGEX_DOS safe-pattern check used to test the first
+    quoted string found anywhere in the snippet for nested quantifiers. An
+    unrelated route path like '/validate' sitting near a genuinely catastrophic
+    regex would be graded instead of the regex itself, falsely marking a
+    vulnerable snippet as safe. The fix anchors extraction to the actual regex
+    API call (re.compile/match/search/fullmatch, new RegExp, or /pattern/.test).
+    """
+
+    CATASTROPHIC_PY = (
+        '@app.route("/validate")\n'
+        'def validate():\n'
+        '    pattern = re.compile(r"(a+)+$")\n'
+        '    if pattern.match(user_input):\n'
+        '        return "ok"\n'
+    )
+    SAFE_PY = (
+        '@app.route("/validate")\n'
+        'def validate():\n'
+        '    pattern = re.compile(r"^[a-z0-9]+$")\n'
+        '    if pattern.match(user_input):\n'
+        '        return "ok"\n'
+    )
+    CATASTROPHIC_JS_NEW_REGEXP = (
+        'app.post("/validate", (req,res) => { '
+        'const re = new RegExp("(a+)+$"); re.test(req.body.x); })'
+    )
+    CATASTROPHIC_JS_LITERAL_TEST = (
+        'app.post("/validate", (req,res) => { /(a+)+$/.test(req.body.x); })'
+    )
+    SAFE_JS_LITERAL_TEST = (
+        'app.post("/validate", (req,res) => { /^[a-z0-9]+$/.test(req.body.x); })'
+    )
+    NO_REGEX_CALL_AT_ALL = '@app.route("/validate")\ndef validate():\n    return "ok"'
+
+    def test_catastrophic_regex_near_route_string_not_marked_safe(self):
+        assert not _classifier()._code_is_safe("REGEX_DOS", self.CATASTROPHIC_PY)
+        assert not _classifier()._code_is_safe("PATH_DISCOVERY", self.CATASTROPHIC_PY)
+
+    def test_safe_regex_near_same_route_string_is_marked_safe(self):
+        assert _classifier()._code_is_safe("REGEX_DOS", self.SAFE_PY)
+
+    def test_js_new_regexp_catastrophic_not_marked_safe(self):
+        assert not _classifier()._code_is_safe("REGEX_DOS", self.CATASTROPHIC_JS_NEW_REGEXP)
+
+    def test_js_literal_test_catastrophic_not_marked_safe(self):
+        assert not _classifier()._code_is_safe("REGEX_DOS", self.CATASTROPHIC_JS_LITERAL_TEST)
+
+    def test_js_literal_test_safe_is_marked_safe(self):
+        assert _classifier()._code_is_safe("REGEX_DOS", self.SAFE_JS_LITERAL_TEST)
+
+    def test_no_regex_construction_present_not_marked_safe(self):
+        assert not _classifier()._code_is_safe("REGEX_DOS", self.NO_REGEX_CALL_AT_ALL)

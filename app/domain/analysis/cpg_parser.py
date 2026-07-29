@@ -985,7 +985,14 @@ class CPGParser:
         """Extract assignment (Python and generic)"""
         assign_text = self._slice_source(ts_node.start_byte, ts_node.end_byte, source_code)
         var_names = []
+        # Assignment operators -- anything at or after these is the RHS value, not a target.
+        _ASSIGN_OPS = {
+            "=", "+=", "-=", "*=", "/=", "//=", "%=", "**=",
+            "&=", "|=", "^=", ">>=", "<<=", ":=",
+        }
         for child in ts_node.children:
+            if child.type in _ASSIGN_OPS:
+                break  # everything after the operator is the value, not a target
             if child.type == "identifier":
                 name = self._slice_source(child.start_byte, child.end_byte, source_code)
                 var_names.append(name)

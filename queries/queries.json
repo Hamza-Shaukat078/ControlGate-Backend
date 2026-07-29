@@ -176,7 +176,7 @@
       "url\\.parse\\s*\\([^)]*req\\.url[^)]*\\)\\.query\\.[a-zA-Z_]\\w*[\\s\\S]{0,400}(?:cp\\.)?(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|fork)\\s*\\(",
       "spawn\\s*\\([^)]*(?:\\+[^)]*[a-zA-Z_]|(?<!['\\\"])\\b[a-zA-Z_]\\w*\\s*,)[^)]*shell\\s*:\\s*true",
       "execSync\\s*\\(\\s*(?!['\\\"`])(?!timeout\\b)(?!options\\b)[a-zA-Z_]\\w*\\s*[).]",
-      "subprocess\\.(?:run|Popen|call|check_call|check_output)\\s*\\(\\s*\\[[^\\]]*[a-zA-Z_][a-zA-Z0-9_.]*\\s*(?:[+,\\]])",
+      "subprocess\\.(?:run|Popen|call|check_call|check_output)\\s*\\(\\s*\\[[^\\]]*(?:request\\.|req\\.|user_input|user_cmd|cmd|command|shell_cmd)[^\\]]*(?:[+,\\]])",
       "os\\.system\\s*\\(\\s*[a-zA-Z_][^)\\n]*(?:[+%]|format\\s*\\(|\\.join\\s*\\(|f['\"]|\\bcommand\\b|\\bcmd\\b|\\barg)",
       "os\\.popen\\s*\\(\\s*[a-zA-Z_][^)\\n]*(?:[+%]|format\\s*\\(|\\.join\\s*\\(|f['\"]|\\bcommand\\b|\\bcmd\\b)",
       "subprocess\\.check_output\\s*\\([^)\\n]*(?:shell\\s*=\\s*True|[a-zA-Z_]\\w*\\s*[+]|f['\"])",
@@ -435,7 +435,8 @@
       "[a-zA-Z_]\\w*\\s*=\\s*request\\.(?:args|form|values|json|data)(?:\\.get)?\\s*\\("
     ],
     "asvs_controls": [
-      "V5.3.2"
+      "V5.3.2",
+      "V5.4.1"
     ]
   },
   "SSRF": {
@@ -527,10 +528,11 @@
       "urllib\\.parse\\.urljoin\\s*\\([^)]*(?:request\\.|req\\.)[^)]*\\)[^\\n]{0,300}(?:requests?\\.|urlopen|httpx\\.(?:get|post|AsyncClient)|fetch|got)",
       "(?:got|node-fetch|superagent|needle|axios)\\.(?:get|post|put|delete|request)?\\s*\\(?[^)\\n]*(?:req\\.|request\\.|callback|webhook|\\burl\\b|endpoint)(?![^)]*(?:allowlist|ALLOWED|validateUrl|is_safe_url))",
       "new\\s+URL\\s*\\([^)\\n]*(?:req\\.|request\\.|\\burl\\b|callback)[^)]*\\)[^\\n]{0,300}(?:fetch|axios|got|request\\.get|urlopen)",
-      "requests\\.(get|post|put|delete|request)\\s*\\(\\s*[a-zA-Z_][a-zA-Z0-9_]*\\s*[,)](?![^\\n]*(?:allowlist|ALLOWED|is_safe_url|urlparse\\.scheme))"
+      "requests\\.(get|post|put|delete|request)\\s*\\(\\s*(?!(?-i:[A-Z][A-Z0-9_]*\\s*[,)]))[a-zA-Z_][a-zA-Z0-9_]*\\s*[,)](?![^\\n]*(?:allowlist|ALLOWED|is_safe_url|urlparse\\.scheme))"
     ],
     "asvs_controls": [
-      "V5.3.2"
+      "V5.3.2",
+      "V1.3.6"
     ]
   },
   "BROKEN_ACCESS_CONTROL": {
@@ -635,6 +637,9 @@
       "jsonpickle\\.decode\\s*\\(",
       "shelve\\.open\\s*\\(",
       "__reduce__\\s*\\("
+    ],
+    "asvs_controls": [
+      "V1.5.2"
     ]
   },
   "WEAK_CRYPTO": {
@@ -719,7 +724,10 @@
       "(?i)PRIVATE_KEY\\s*=\\s*['\"][^'\"\\n\\r]{8,}['\"]",
       "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
     ],
-    "confidence": "high"
+    "confidence": "high",
+    "asvs_controls": [
+      "V13.3.1"
+    ]
   },
   "DEBUG_MODE_ENABLED": {
     "rule_id": "DEBUG_MODE_ENABLED",
@@ -749,7 +757,10 @@
       "debug\\s*=\\s*true",
       "app\\.run\\(.*debug\\s*=\\s*True"
     ],
-    "confidence": "high"
+    "confidence": "high",
+    "asvs_controls": [
+      "V13.4.2"
+    ]
   },
   "LDAP_INJECTION": {
     "rule_id": "LDAP_INJECTION",
@@ -788,7 +799,13 @@
       "ldap\\.search\\s*\\(",
       "ldap\\.bind\\s*\\(",
       "search_s\\s*\\(",
-      "ldap3\\.Connection\\s*\\([^)]*(?:request\\.|req\\.)"
+      "ldap3\\.Connection\\s*\\([^)]*(?:request\\.|req\\.)",
+      "(?:search_filter|filter_str|ldap_filter)\\s*=\\s*f['\\\"][^\\n]*\\{[^}]+\\}",
+      "(?:conn|connection|ldap_conn|ldap)\\.search\\s*\\([^)]*\\+",
+      "(?:conn|connection|ldap_conn|ldap)\\.search\\s*\\(\\s*f['\\\"]"
+    ],
+    "asvs_controls": [
+      "V1.2.6"
     ]
   },
   "XML_INJECTION": {
@@ -869,18 +886,23 @@
       "req.body"
     ],
     "sinks": [
-      "Model.objects.create",
-      "Model.objects.update",
-      "Model.create",
-      "Model.update",
       "save",
       "update",
+      "create",
       "update_attributes"
     ],
     "patterns": [
       "DFG_FLOW AND NOT exists(field_filter)"
     ],
-    "confidence": "low"
+    "regex_patterns": [
+      "(?:data|payload|body)\\s*=\\s*request\\.(?:json(?!\\s*\\.)|form(?!\\s*\\.)|values(?!\\s*\\.)|get_json\\s*\\(\\s*\\))[\\s\\S]{0,200}\\.(?:update|create|save|update_attributes)\\s*\\(\\s*\\*\\*(?:data|payload|body)",
+      "(?:User|Account|Profile|Model)\\.objects\\.(?:update|create)\\s*\\(\\s*\\*\\*(?:request\\.(?:json(?!\\s*\\.)|form(?!\\s*\\.)|values(?!\\s*\\.))|req\\.body)",
+      "Object\\.assign\\s*\\(\\s*\\{\\s*\\}\\s*,\\s*req\\.body\\s*\\)"
+    ],
+    "confidence": "low",
+    "asvs_controls": [
+      "V15.3.3"
+    ]
   },
   "CORS_MISCONFIGURATION": {
     "rule_id": "CORS_MISCONFIGURATION",
@@ -1018,6 +1040,9 @@
       "jinja2\\.Template\\s*\\(",
       "\\.from_string\\s*\\(\\s*[^'\"\\s\\)]",
       "Template\\s*\\(\\s*[a-zA-Z_]"
+    ],
+    "asvs_controls": [
+      "V1.3.7"
     ]
   },
   "NOSQL_INJECTION": {
@@ -1083,7 +1108,10 @@
       "token",
       "session",
       "password",
-      "key"
+      "key",
+      "otp",
+      "verification_code",
+      "verification code"
     ],
     "sanitizers": [
       "secrets",
@@ -1093,6 +1121,10 @@
     "regex_patterns": [
       "(?<![a-zA-Z_])random\\.(random|randint|choice|randrange|uniform)\\s*\\(",
       "Math\\.random\\s*\\("
+    ],
+    "asvs_controls": [
+      "V11.5.1",
+      "V6.5.3"
     ]
   },
   "UNVALIDATED_REDIRECT": {
@@ -1136,6 +1168,9 @@
       "res\\.redirect\\s*\\(\\s*[^'\"\\s\\)][^)]*\\)(?![^)]*(?:is_safe_url|urlparse|validate))",
       "window\\.location(?:\\.href)?\\s*=\\s*[a-zA-Z_]\\w*",
       "(?![\\.\\s\\S]{0,800}(?:urlparse|is_safe_url|validateRedirect|ALLOWED\\.has|allowlist))request\\.(?:args|form|get_json)(?:\\.get)?\\s*\\(['\"](?:next|url|redirect|return|returnUrl|goto|back|target)['\"]\\)[\\s\\S]{0,300}(?:redirect\\s*\\(|window\\.location|res\\.redirect)"
+    ],
+    "asvs_controls": [
+      "V3.7.2"
     ]
   },
   "JWT_WEAK_SECRET": {
@@ -1222,7 +1257,10 @@
     "sanitizers": [
       "Object.freeze"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "asvs_controls": [
+      "V15.3.6"
+    ]
   },
   "BUFFER_OVERFLOW": {
     "rule_id": "BUFFER_OVERFLOW",
@@ -1294,6 +1332,8 @@
     "sources": [
       "request.args",
       "request.headers",
+      "request.form",
+      "request.json",
       "req.query",
       "req.headers"
     ],
@@ -1320,7 +1360,12 @@
     "regex_patterns": [
       "(?:logging|logger)\\.(info|debug|warning|error|critical)\\s*\\([^\\n]*(?:request\\.(?:args|form|json|data|headers)|req\\.(?:query|body|params|headers)|sys\\.argv\\[|%[sd][^\\n]*(?:request\\.|req\\.)|f['\"][^\\n]*request\\.(?:args|form|json|headers))",
       "(?<![a-zA-Z_.])print\\s*\\([^\\n]*(?:request\\.(?:args|form|json)|req\\.(?:query|body|params)|sys\\.argv\\s*\\[)",
-      "console\\.(log|error|warn)\\s*\\([^\\n]*(?:req\\.(?:query|body|params|headers)|request\\.(?:args|form|json))"
+      "console\\.(log|error|warn)\\s*\\([^\\n]*(?:req\\.(?:query|body|params|headers)|request\\.(?:args|form|json))",
+      "(\\w+)\\s*=\\s*request\\.(?:form|args|json)(?:\\.get\\([^)]*\\)|\\[[^\\]]*\\])?[\\s\\S]{0,150}(?:logger|logging)\\.\\w+\\s*\\([^\\n]*\\+\\s*\\1\\b",
+      "(\\w+)\\s*=\\s*request\\.(?:form|args|json)(?:\\.get\\([^)]*\\)|\\[[^\\]]*\\])?[\\s\\S]{0,150}(?:logger|logging)\\.\\w+\\s*\\(\\s*f['\"][^\\n]*\\{\\s*\\1\\s*\\}"
+    ],
+    "asvs_controls": [
+      "V16.4.1"
     ]
   },
   "UNRESTRICTED_FILE_UPLOAD": {
@@ -1376,7 +1421,6 @@
     "regex_patterns": [
       "set_cookie\\((?![^)]*secure\\s*=\\s*True)[^)]+\\)",
       "res\\.cookie\\((?![^)]*(?:secure\\s*:\\s*true|secure\\s*=\\s*True))[^)]+\\)",
-      "set_cookie\\((?![^)]*httponly\\s*=\\s*True)[^)]+\\)",
       "Set-Cookie[\\\"']?\\s*:\\s*[\\\"'][^\\\"']*(?!.*Secure)[^\\\"']*[\\\"']"
     ],
     "sanitizers": [
@@ -1456,12 +1500,14 @@
     "regex_patterns": [
       "verify\\s*=\\s*False",
       "rejectUnauthorized:\\s*false",
-      "strictSSL:\\s*false"
+      "strictSSL:\\s*false",
+      "NODE_TLS_REJECT_UNAUTHORIZED\\s*=\\s*['\\\"]?0['\\\"]?"
     ],
     "sanitizers": [],
     "confidence": "high",
     "asvs_controls": [
-      "V12.2.2"
+      "V12.2.2",
+      "V12.3.2"
     ]
   },
   "ZIPSLIP_VULNERABILITY": {
@@ -1495,6 +1541,9 @@
     "regex_patterns": [
       "(?:zipfile|tarfile)\\.(?:extract|extractall)\\s*\\(",
       "\\.extractall\\s*\\("
+    ],
+    "asvs_controls": [
+      "V5.2.3"
     ]
   },
   "REGEX_DOS": {
@@ -1533,6 +1582,9 @@
       "re\\.(?:match|search|fullmatch)\\s*\\(r?['\\\"][^'\\\"]*\\)+[+*][^'\\\"]*['\\\"],\\s*(?:request\\.(?:args|form|json|get_json)|req\\.(?:query|params|body))",
       "request\\.(?:args|form)(?:\\.get\\s*\\([^)]+\\)|\\.(?!get\\b)[a-zA-Z_]+)[\\s\\S]{0,200}re\\.(?:match|search|fullmatch)\\s*\\(r?['\\\"][^'\\\"]*\\)+[+*]",
       "\\.test\\s*\\((?:req\\.|request\\.|[a-zA-Z_]\\w*(?:input|data|query|search|term))"
+    ],
+    "asvs_controls": [
+      "V1.2.9"
     ]
   },
   "INFORMATION_EXPOSURE_ERROR": {
@@ -1935,7 +1987,8 @@
     ],
     "confidence": "medium",
     "asvs_controls": [
-      "V6.3.2"
+      "V6.3.2",
+      "V13.2.3"
     ]
   },
   "REMOTE_SCRIPT_EXECUTION": {
@@ -2614,7 +2667,8 @@
       "typescript"
     ],
     "asvs_controls": [
-      "V6.2.4"
+      "V6.2.4",
+      "V6.2.12"
     ],
     "sources": [],
     "sinks": [],
@@ -2623,7 +2677,7 @@
     "confidence": "low",
     "regex_patterns": [
       "zxcvbn",
-      "(?:haveibeenpwned|hibp)",
+      "(?:haveibeenpwned|hibp|pwnedpasswords)",
       "(?:common|banned)[-_]?password"
     ],
     "rule_id": "WEAK_PASSWORD_NO_BANNED_LIST_CHECK",
@@ -2796,7 +2850,8 @@
       "typescript"
     ],
     "asvs_controls": [
-      "V7.2.1"
+      "V7.2.1",
+      "V6.8.2"
     ],
     "sources": [],
     "sinks": [],
@@ -2805,7 +2860,10 @@
     "confidence": "high",
     "regex_patterns": [
       "jwt\\.decode\\([^)]*verify=False",
-      "jwt\\.decode\\([^)]*options=\\{[^}]*[\\\"']verify_signature[\\\"']\\s*:\\s*False"
+      "jwt\\.decode\\([^)]*options=\\{[^}]*[\\\"']verify_signature[\\\"']\\s*:\\s*False",
+      "[\\\"']wantAssertionsSigned[\\\"']\\s*:\\s*(?:False|false)",
+      "[\\\"']wantMessagesSigned[\\\"']\\s*:\\s*(?:False|false)",
+      "wantAssertionsSigned\\s*=\\s*(?:False|false)"
     ],
     "rule_id": "SESSION_VERIFICATION_BYPASSED"
   },
@@ -3004,5 +3062,1604 @@
     ],
     "rule_id": "CLIENT_STORAGE_NOT_CLEARED_ON_LOGOUT",
     "finding_polarity": "compliant"
+  },
+  "COOKIE_MISSING_SAMESITE": {
+    "rule_id": "COOKIE_MISSING_SAMESITE",
+    "name": "Cookie Missing SameSite Attribute",
+    "owasp": "A05",
+    "cwe": "CWE-1275",
+    "description": "Cookie set without an explicit SameSite attribute, leaving it exposed to cross-site request forgery",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "regex_patterns": [
+      "set_cookie\\((?![^)]*samesite\\s*=)[^)]+\\)",
+      "res\\.cookie\\((?![^)]*[Ss]ame[Ss]ite\\s*:)[^)]+\\)",
+      "Set-Cookie[\"\\']?\\s*:\\s*[\"\\'][^\"\\']*(?!.*SameSite)[^\"\\']*[\"\\']"
+    ],
+    "sanitizers": [
+      "samesite=Strict",
+      "samesite=Lax",
+      "sameSite: \"strict\"",
+      "sameSite: \"lax\""
+    ],
+    "confidence": "low",
+    "asvs_controls": [
+      "V3.3.2"
+    ]
+  },
+  "COOKIE_MISSING_HTTPONLY": {
+    "rule_id": "COOKIE_MISSING_HTTPONLY",
+    "name": "Cookie Missing HttpOnly Attribute",
+    "owasp": "A05",
+    "cwe": "CWE-1004",
+    "description": "Session or other client-inaccessible cookie set without the HttpOnly attribute, exposing it to client-side script access",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "regex_patterns": [
+      "set_cookie\\((?![^)]*httponly\\s*=\\s*True)[^)]+\\)",
+      "res\\.cookie\\((?![^)]*httpOnly\\s*:\\s*true)[^)]+\\)",
+      "Set-Cookie[\"\\']?\\s*:\\s*[\"\\'][^\"\\']*(?!.*HttpOnly)[^\"\\']*[\"\\']"
+    ],
+    "sanitizers": [
+      "httponly=True",
+      "httpOnly: true"
+    ],
+    "confidence": "low",
+    "asvs_controls": [
+      "V3.3.4"
+    ]
+  },
+  "GRAPHQL_INTROSPECTION_ENABLED": {
+    "rule_id": "GRAPHQL_INTROSPECTION_ENABLED",
+    "name": "GraphQL Introspection Enabled",
+    "owasp": "A05",
+    "cwe": "CWE-215",
+    "description": "GraphQL introspection or GraphiQL explorer left enabled, exposing the full schema to unauthenticated clients",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "dangerous_settings": [
+      "introspection: true",
+      "GRAPHIQL = True",
+      "graphiql: true"
+    ],
+    "regex_patterns": [
+      "introspection\\s*:\\s*[Tt]rue",
+      "GRAPHIQL\\s*=\\s*True",
+      "graphiql\\s*[:=]\\s*[Tt]rue"
+    ],
+    "confidence": "medium",
+    "asvs_controls": [
+      "V4.3.2"
+    ]
+  },
+  "JWT_MISSING_AUDIENCE_CHECK": {
+    "rule_id": "JWT_MISSING_AUDIENCE_CHECK",
+    "name": "JWT Decoded Without Audience Validation",
+    "owasp": "A07",
+    "cwe": "CWE-345",
+    "description": "JWT verification does not validate the 'aud' claim, allowing a token issued for a different service to be accepted",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "audience=",
+      "audience:"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "jwt\\.decode\\s*\\((?![^)]*audience\\s*=)[^)]*\\)",
+      "jwt\\.verify\\s*\\((?![^)]*audience\\s*:)[^)]*\\)"
+    ],
+    "asvs_controls": [
+      "V9.2.3"
+    ]
+  },
+  "WEAK_PASSWORD_HASHING": {
+    "rule_id": "WEAK_PASSWORD_HASHING",
+    "name": "Weak Password Hashing Algorithm",
+    "owasp": "A02",
+    "cwe": "CWE-916",
+    "description": "Password hashed with a fast general-purpose hash (MD5/SHA1/SHA256) instead of an approved password hashing function",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [
+      "hashlib.md5",
+      "hashlib.sha1",
+      "hashlib.sha256",
+      "crypto.createHash"
+    ],
+    "patterns": [],
+    "sanitizers": [
+      "bcrypt",
+      "argon2",
+      "scrypt",
+      "pbkdf2",
+      "PBKDF2"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "hashlib\\.(?:md5|sha1|sha256)\\s*\\([^)]*(?:password|pwd|passwd)",
+      "crypto\\.createHash\\s*\\(\\s*[\"\\'](?:md5|sha1|sha256)[\"\\'][^\\n]*(?:password|pwd|passwd)"
+    ],
+    "asvs_controls": [
+      "V11.4.2"
+    ]
+  },
+  "FOLLOWS_REDIRECTS_ON_EXTERNAL_CALL": {
+    "rule_id": "FOLLOWS_REDIRECTS_ON_EXTERNAL_CALL",
+    "name": "Backend HTTP Client Follows Redirects on External Call",
+    "owasp": "A10",
+    "cwe": "CWE-601",
+    "description": "Backend call to an externally-controlled URL does not disable automatic redirect-following, which can be abused to reach internal resources",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [
+      "url",
+      "target_url",
+      "callback_url",
+      "webhook",
+      "external_url"
+    ],
+    "sinks": [
+      "requests.get",
+      "requests.post",
+      "requests.request",
+      "axios.get",
+      "axios.post"
+    ],
+    "patterns": [],
+    "sanitizers": [
+      "allow_redirects=False",
+      "maxRedirects: 0",
+      "redirect: 'manual'"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "requests\\.(?:get|post|put|delete|request)\\s*\\(\\s*(?:url|target_url|callback_url|webhook|external_url)\\b(?![^)]*allow_redirects\\s*=\\s*False)[^)]*\\)",
+      "axios\\.(?:get|post)\\s*\\(\\s*(?:url|targetUrl|callbackUrl|webhook)\\b(?![^)]*maxRedirects\\s*:\\s*0)[^)]*\\)"
+    ],
+    "asvs_controls": [
+      "V15.3.2"
+    ]
+  },
+  "COOKIE_HOST_PREFIX_MISSING": {
+    "rule_id": "COOKIE_HOST_PREFIX_MISSING",
+    "name": "Cookie Missing __Host- Prefix",
+    "owasp": "A05",
+    "cwe": "CWE-565",
+    "description": "Session or authentication cookies are set without the __Host- prefix. The __Host- prefix forces Secure, no Domain, and path=/ in compliant browsers, preventing subdomain-level cookie injection attacks.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "set_cookie\\(\\s*['\\\"](?!__Host-|__Secure-)[a-zA-Z0-9_-]*(?:session|auth|token|csrf|sid|user)[a-zA-Z0-9_-]*['\\\"]",
+      "res\\.cookie\\(\\s*['\\\"](?!__Host-|__Secure-)[a-zA-Z0-9_-]*(?:session|auth|token|csrf|sid|user)[a-zA-Z0-9_-]*['\\\"]",
+      "Set-Cookie\\s*[=:]\\s*['\\\"]?(?!__Host-|__Secure-)[a-zA-Z0-9_-]*(?:session|auth|token|csrf|sid|user)[a-zA-Z0-9_-]*[=;]",
+      "document\\.cookie\\s*=\\s*['\\\"](?!__Host-|__Secure-)[a-zA-Z0-9_-]*(?:session|auth|token|csrf|sid|user)[a-zA-Z0-9_-]*="
+    ],
+    "asvs_controls": [
+      "V3.3.3"
+    ]
+  },
+  "POSTMESSAGE_ORIGIN_NOT_CHECKED": {
+    "rule_id": "POSTMESSAGE_ORIGIN_NOT_CHECKED",
+    "name": "postMessage Origin Not Validated",
+    "owasp": "A05",
+    "cwe": "CWE-346",
+    "description": "A postMessage event listener processes messages without validating event.origin. An attacker from any origin can send crafted messages and trigger the handler, potentially leading to XSS or CSRF.",
+    "severity": "high",
+    "languages": [
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "event.origin",
+      "e.origin",
+      "msg.origin",
+      "message.origin"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "addEventListener\\s*\\(\\s*['\\\"]message['\\\"]\\s*,\\s*(?:function\\s*\\([^)]*\\)|[a-zA-Z_]\\w*|\\([^)]*\\)\\s*=>)\\s*\\{(?=[^}]*\\bdata\\b)(?!(?:[^}]*\\.origin\\b))[^}]*\\}",
+      "(?:window|self)\\.onmessage\\s*=\\s*(?:function\\s*\\([^)]*\\)|\\([^)]*\\)\\s*=>)\\s*\\{(?=[^}]*\\.data\\b)(?![^}]*\\.origin\\b)[^}]*\\}",
+      "addEventListener\\s*\\(\\s*['\\\"]message['\\\"]\\s*,(?=(?:(?!addEventListener).){0,800}\\.data\\b)(?!(?:(?!addEventListener).){0,800}\\.origin\\b)"
+    ],
+    "asvs_controls": [
+      "V3.5.5"
+    ]
+  },
+  "DEPRECATED_CLIENT_TECH": {
+    "rule_id": "DEPRECATED_CLIENT_TECH",
+    "name": "Deprecated Client-Side Technology",
+    "owasp": "A06",
+    "cwe": "CWE-477",
+    "description": "The application uses a deprecated and insecure client-side technology (Flash, ActiveX, Silverlight, Java Applets, VBScript, VRML). These are end-of-life and routinely exploited via known CVEs.",
+    "severity": "high",
+    "languages": [
+      "javascript",
+      "typescript",
+      "python"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "high",
+    "file_patterns": [
+      "\\.html?$",
+      "\\.js$",
+      "\\.ts$",
+      "\\.py$",
+      "\\.aspx?$",
+      "\\.php$"
+    ],
+    "regex_patterns": [
+      "<object[^>]*(?:application/x-shockwave-flash|\\.swf)[^>]*>",
+      "<embed[^>]*(?:application/x-shockwave-flash|\\.swf)[^>]*/?>",
+      "(?:SWFObject|swfobject)\\s*\\(",
+      "\\.swf['\\\"\\s]",
+      "<object[^>]*classid\\s*=\\s*['\\\"]clsid:",
+      "ActiveXObject\\s*\\(",
+      "new\\s+ActiveXObject\\s*\\(",
+      "application/x-silverlight",
+      "<object[^>]*type\\s*=\\s*['\\\"]application/x-silverlight",
+      "<applet\\b",
+      "application/x-java-applet",
+      "<object[^>]*application/java",
+      "<script[^>]+language\\s*=\\s*['\\\"]vbscript['\\\"]",
+      "type\\s*=\\s*['\\\"]text/vbscript['\\\"]",
+      "VBScript\\s*:",
+      "application/(?:x-vrml|x-world|x3d\\+xml)"
+    ],
+    "asvs_controls": [
+      "V3.7.1"
+    ]
+  },
+  "SPOOFABLE_PROXY_HEADER": {
+    "rule_id": "SPOOFABLE_PROXY_HEADER",
+    "name": "Spoofable Proxy Header Used for Access Control",
+    "owasp": "A01",
+    "cwe": "CWE-807",
+    "description": "The application reads a spoofable proxy header (X-Forwarded-For, X-Real-IP, CF-Connecting-IP, etc.) for security decisions such as IP-based access control, rate limiting, or geo-restriction. Clients can trivially forge these headers, bypassing the control.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "request\\.headers\\.get\\s*\\(\\s*['\\\"](?:X-Forwarded-For|X-Real-IP|X-Client-IP|X-Forwarded-Host|CF-Connecting-IP|True-Client-IP|Forwarded)['\\\"]",
+      "request\\.environ(?:\\.get)?\\s*\\(\\s*['\\\"]HTTP_X_(?:FORWARDED_FOR|REAL_IP|CLIENT_IP)['\\\"]",
+      "req\\.headers\\s*\\[\\s*['\\\"](?:x-forwarded-for|x-real-ip|x-client-ip|cf-connecting-ip|true-client-ip)['\\\"]",
+      "req\\.(?:header|get)\\s*\\(\\s*['\\\"](?:X-Forwarded-For|X-Real-IP|X-Client-IP|CF-Connecting-IP|True-Client-IP)['\\\"]",
+      "HTTP_X_FORWARDED_FOR\\b",
+      "['\\\"]X-Forwarded-For['\\\"]\\s*(?:\\]|,|\\))[^;\\n]{0,200}(?:allow|block|restrict|ban|whitelist|blacklist|rate|limit|check|if|==|!=|in\\s)"
+    ],
+    "asvs_controls": [
+      "V4.1.3"
+    ]
+  },
+  "HTTP_REQUEST_SMUGGLING": {
+    "rule_id": "HTTP_REQUEST_SMUGGLING",
+    "name": "HTTP Request Smuggling Risk",
+    "owasp": "A02",
+    "cwe": "CWE-444",
+    "description": "The application manually constructs HTTP headers in a way that could produce conflicting Content-Length and Transfer-Encoding values, or forwards raw HTTP to an upstream without stripping hop-by-hop headers. This is a precondition for HTTP request smuggling attacks.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "['\\\"]Content-Length['\\\"]\\s*[=:][^;\\n]{0,200}['\\\"]Transfer-Encoding['\\\"]",
+      "['\\\"]Transfer-Encoding['\\\"]\\s*[=:][^;\\n]{0,200}['\\\"]Content-Length['\\\"]",
+      "['\\\"]Transfer-Encoding['\\\"]\\s*(?:\\]?\\s*=|:)\\s*['\\\"]chunked['\\\"]",
+      "(?:proxy_pass|forward|pipe)\\s*\\([^)]*(?:req\\.headers|request\\.headers)\\b",
+      "http\\.request\\s*\\([^{]*\\{[^}]*['\\\"]Transfer-Encoding['\\\"]\\s*:[^}]*['\\\"]Content-Length['\\\"]"
+    ],
+    "asvs_controls": [
+      "V4.2.1"
+    ]
+  },
+  "GRAPHQL_NO_COST_LIMIT": {
+    "rule_id": "GRAPHQL_NO_COST_LIMIT",
+    "name": "GraphQL Missing Depth/Cost Limiting",
+    "owasp": "A05",
+    "cwe": "CWE-770",
+    "description": "GraphQL endpoint is configured without depth limiting or query cost analysis. An attacker can craft deeply nested or highly expensive queries to exhaust server resources (GraphQL DoS).",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "depth_limit",
+      "depthLimit",
+      "max_depth",
+      "maxDepth",
+      "cost_limit",
+      "costLimit",
+      "query_cost",
+      "queryCost",
+      "complexity_limit",
+      "complexityLimit",
+      "queryComplexity",
+      "graphql-depth-limit",
+      "graphql-query-complexity"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "graphene\\.Schema\\s*\\((?:(?!graphene\\.Schema).){0,400}\\)(?!(?:(?!graphene\\.Schema).){0,600}(?:depth_limit|max_depth|cost_limit|validation_rules|QueryDepthLimiter))",
+      "strawberry\\.Schema\\s*\\((?:(?!strawberry\\.Schema).){0,400}\\)(?!(?:(?!strawberry\\.Schema).){0,600}(?:depth_limit|max_depth|extensions|QueryDepthLimiter|MaxTokensLimiter))",
+      "new\\s+ApolloServer\\s*\\(\\s*\\{(?![^}]*(?:depthLimit|costLimit|queryDepth|QueryComplexity|validationRules))[^}]*\\}",
+      "graphqlHTTP\\s*\\(\\s*\\{(?![^}]*(?:validationRules|depthLimit|costLimit))[^}]*\\}",
+      "introspection\\s*:\\s*true(?![\\s\\S]{0,600}(?:depthLimit|costLimit|validationRules))"
+    ],
+    "asvs_controls": [
+      "V4.3.1"
+    ]
+  },
+  "WEBSOCKET_ORIGIN_NOT_CHECKED": {
+    "rule_id": "WEBSOCKET_ORIGIN_NOT_CHECKED",
+    "name": "WebSocket Missing Origin Validation",
+    "owasp": "A05",
+    "cwe": "CWE-346",
+    "description": "The server-side WebSocket connection handler does not validate the Origin header before accepting the upgrade. This allows any website to initiate a cross-origin WebSocket connection and potentially read sensitive server-push data (CSWSH).",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "origin",
+      "ORIGIN",
+      "allowed_origins",
+      "ALLOWED_ORIGINS",
+      "check_origin",
+      "checkOrigin",
+      "verify_origin"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "def\\s+check_origin\\s*\\(\\s*self[^)]*\\)\\s*:[^:]{0,200}return\\s+True\\b",
+      "websockets\\.serve\\s*\\([\\s\\S]{0,400}\\)(?![\\s\\S]{0,600}(?:origins|check_origin|allowed_origins|Origin))",
+      "await\\s+self\\.accept\\s*\\(\\s*\\)(?![\\s\\S]{0,400}(?:origin|Origin|ALLOWED_HOSTS|check_origin))",
+      "new\\s+WebSocketServer\\s*\\(\\s*\\{(?![\\s\\S]{0,600}verifyClient)[\\s\\S]{0,600}\\}\\s*\\)",
+      "new\\s+Server\\s*\\(\\s*(?:httpServer|app|server)\\s*,\\s*\\{(?![\\s\\S]{0,400}(?:cors|origin|allowedOrigins))[\\s\\S]{0,400}\\}\\s*\\)",
+      "require\\s*\\(\\s*['\\\"]socket\\.io['\\\"]\\s*\\)\\s*\\([\\s\\S]{0,400}\\)(?![\\s\\S]{0,600}(?:cors|origin|allowedOrigins))",
+      "new\\s+WebSocket\\.Server\\s*\\(\\s*\\{(?![\\s\\S]{0,600}verifyClient)[\\s\\S]{0,600}\\}\\s*\\)"
+    ],
+    "asvs_controls": [
+      "V4.4.2"
+    ]
+  },
+  "UNSAFE_DOWNLOAD_FILENAME_ENCODING": {
+    "rule_id": "UNSAFE_DOWNLOAD_FILENAME_ENCODING",
+    "name": "Download Filename Not Encoded/Sanitized",
+    "owasp": "A03",
+    "cwe": "CWE-93",
+    "description": "Content-Disposition filename built via string interpolation/concatenation without encoding or sanitizing the filename, risking header/response-splitting or path issues",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [
+      "Content-Disposition"
+    ],
+    "patterns": [],
+    "sanitizers": [
+      "secure_filename",
+      "quote",
+      "encodeURIComponent"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "[\\\"']Content-Disposition[\\\"']\\s*\\]?\\s*=\\s*f[\\\"'][^\\\"']*filename=",
+      "[\\\"']Content-Disposition[\\\"']\\s*\\]?\\s*=\\s*[\\\"'][^\\\"']*filename=[\\\"']\\s*\\+",
+      "headers\\[[\\\"']Content-Disposition[\\\"']\\]\\s*=\\s*[\\\"'][^\\\"']*filename=\\{"
+    ],
+    "asvs_controls": [
+      "V5.4.2"
+    ]
+  },
+  "JWT_TOKEN_TYPE_NOT_VALIDATED": {
+    "rule_id": "JWT_TOKEN_TYPE_NOT_VALIDATED",
+    "name": "JWT Token Type Not Validated",
+    "owasp": "A07",
+    "cwe": "CWE-345",
+    "description": "JWT payload used for an authorization decision (scope/permissions) without first validating the token's type ('typ'/'token_type' claim), allowing an ID token to be accepted where an access token is expected",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "token_type",
+      "typ",
+      "token_use"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "jwt\\.decode\\s*\\([^)]*\\)(?![\\s\\S]{0,300}(?:token_type|[\"\\']typ[\"\\']|token_use))[\\s\\S]{0,200}\\.get\\s*\\(\\s*[\"\\'](?:scope|permissions)[\"\\']\\s*\\)",
+      "jwt\\.verify\\s*\\([^)]*\\)(?![\\s\\S]{0,300}(?:token_type|typ\\b|token_use))[\\s\\S]{0,200}\\.(?:scope|permissions)\\b"
+    ],
+    "asvs_controls": [
+      "V9.2.2"
+    ]
+  },
+  "SENSITIVE_DATA_IN_BROWSER_STORAGE": {
+    "rule_id": "SENSITIVE_DATA_IN_BROWSER_STORAGE",
+    "name": "Sensitive Data Stored in Browser Storage",
+    "owasp": "A02",
+    "cwe": "CWE-922",
+    "description": "Sensitive data (password, SSN, credit card, API key/secret) stored in localStorage/sessionStorage, which ASVS only permits for session tokens",
+    "severity": "high",
+    "languages": [
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [
+      "localStorage.setItem",
+      "sessionStorage.setItem"
+    ],
+    "patterns": [],
+    "confidence": "high",
+    "regex_patterns": [
+      "(?:localStorage|sessionStorage)\\.setItem\\s*\\(\\s*[\\\"'](?:password|passwd|ssn|social_security|credit_card|creditcard|card_number|cvv|api_key|apikey|secret|private_key)[\\\"']"
+    ],
+    "asvs_controls": [
+      "V14.3.3"
+    ]
+  },
+  "UNAUTHENTICATED_ENCRYPTION_MODE": {
+    "rule_id": "UNAUTHENTICATED_ENCRYPTION_MODE",
+    "name": "Encryption Without Authentication (Non-AEAD Mode)",
+    "owasp": "A02",
+    "cwe": "CWE-353",
+    "description": "Data encrypted with a non-authenticated cipher mode (CBC/CTR/CFB/OFB) with no separate MAC, allowing undetected ciphertext tampering; use an AEAD mode (GCM/ChaCha20-Poly1305) or add an HMAC",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [
+      "AES.new",
+      "modes.CBC",
+      "modes.CTR",
+      "modes.CFB",
+      "modes.OFB",
+      "createCipheriv"
+    ],
+    "patterns": [],
+    "sanitizers": [
+      "hmac",
+      "HMAC",
+      "GCM",
+      "Poly1305"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "AES\\.new\\s*\\([^)]*AES\\.MODE_(?:CBC|CTR|CFB|OFB)\\b(?![\\s\\S]{0,400}(?:hmac|HMAC|GCM|Poly1305))",
+      "modes\\.(?:CBC|CTR|CFB|OFB)\\s*\\((?![\\s\\S]{0,400}(?:hmac|HMAC|GCM|Poly1305))",
+      "createCipheriv\\s*\\(\\s*[\\\"'](?:aes-\\d+-(?:cbc|ctr|cfb|ofb))[\\\"'](?![\\s\\S]{0,400}(?:createHmac|HMAC|GCM|gcm|Poly1305))"
+    ],
+    "asvs_controls": [
+      "V11.3.3"
+    ]
+  },
+  "EXPOSED_DEBUG_MONITORING_ENDPOINT": {
+    "rule_id": "EXPOSED_DEBUG_MONITORING_ENDPOINT",
+    "name": "Exposed Debug/Documentation/Monitoring Endpoint",
+    "owasp": "A05",
+    "cwe": "CWE-200",
+    "description": "API documentation, actuator, or metrics endpoint registered without an authentication guard, exposing internal implementation details or operational data",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "login_required",
+      "require_auth",
+      "authenticate",
+      "permission",
+      "IsAdmin"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "@app\\.route\\s*\\(\\s*[\"\\'](?:/docs|/redoc|/swagger|/actuator|/metrics|/debug)[^\"\\']*[\"\\']\\s*\\)(?![\\s\\S]{0,150}(?:login_required|require_auth|[Aa]uthenticate|[Pp]ermission))[\\s\\S]{0,150}def\\s+\\w+\\(",
+      "@(?:app|bp|router|\\w+)\\.(?:route|get|post)\\s*\\(\\s*[\"\\'](?:/docs|/redoc|/swagger|/actuator|/metrics|/debug)[^\"\\']*[\"\\']\\s*\\)(?![\\s\\S]{0,150}(?:login_required|require_auth|[Aa]uthenticate|[Pp]ermission))[\\s\\S]{0,150}def\\s+\\w+\\(",
+      "app\\.(?:get|use)\\s*\\(\\s*[\"\\'](?:/docs|/swagger|/actuator|/metrics|/debug)[^\"\\']*[\"\\']\\s*,(?![\\s\\S]{0,150}(?:[Aa]uth|[Ll]ogin|[Pp]ermission))"
+    ],
+    "asvs_controls": [
+      "V13.4.5"
+    ]
+  },
+  "STACK_TRACE_EXPOSED_TO_CLIENT": {
+    "rule_id": "STACK_TRACE_EXPOSED_TO_CLIENT",
+    "name": "Stack Trace or Exception Detail Returned to Client",
+    "owasp": "A05",
+    "cwe": "CWE-209",
+    "description": "Raw exception message or stack trace returned directly in an HTTP response body, leaking internal implementation details to the client",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "except[^:]*:[\\s\\S]{0,200}return[^\\n]*str\\(e\\)",
+      "return[^\\n]*traceback\\.format_exc\\s*\\(\\s*\\)",
+      "res\\.(?:send|json|status\\([^)]*\\)\\.send)\\s*\\([^)]*(?:err|error)\\.stack\\b",
+      "jsonify\\s*\\(\\s*(?:error|message)\\s*=\\s*str\\(e\\)\\)"
+    ],
+    "asvs_controls": [
+      "V16.5.1"
+    ]
+  },
+  "INSUFFICIENT_CRYPTO_KEY_SIZE": {
+    "rule_id": "INSUFFICIENT_CRYPTO_KEY_SIZE",
+    "name": "Cryptographic Key Size Below 128-bit Security Level",
+    "owasp": "A02",
+    "cwe": "CWE-326",
+    "description": "Key size provides less than 128 bits of security (e.g. RSA < 3072, DH < 3072); ASVS 5.0 V11.2.3 requires a 128-bit security minimum, stricter than older 1024/2048 guidance",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "RSA\\.generate\\s*\\(\\s*(?:512|1024|2048)\\b",
+      "key_size\\s*=\\s*(?:512|1024|2048)\\b",
+      "generate_private_key\\([^,)]*(?:512|1024|2048)",
+      "dh\\.generate_parameters\\([^)]*(?:512|1024|2048)",
+      "modulusLength\\s*:\\s*(?:512|1024|2048)\\b"
+    ],
+    "asvs_controls": [
+      "V11.2.3"
+    ]
+  },
+  "XPATH_INJECTION": {
+    "rule_id": "XPATH_INJECTION",
+    "name": "XPath Injection",
+    "owasp": "A03",
+    "cwe": "CWE-643",
+    "description": "User input flows into an XPath expression via string building without escaping",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [
+      "request.GET",
+      "request.POST",
+      "request.args",
+      "request.form",
+      "request.json",
+      "req.query",
+      "req.body",
+      "req.params"
+    ],
+    "sinks": [
+      "xpath",
+      "etree.XPath",
+      "document.evaluate"
+    ],
+    "patterns": [
+      "DFG_FLOW"
+    ],
+    "sanitizers": [
+      "escape",
+      "quote"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "\\.xpath\\s*\\(\\s*f['\\\"]",
+      "\\.xpath\\s*\\([^)]*\\+",
+      "(?:xpath_expr|xpath_query|xpath_filter)\\s*=\\s*f['\\\"][^\\n]*\\{[^}]+\\}[\\s\\S]{0,300}\\.xpath\\s*\\(",
+      "etree\\.XPath\\s*\\(\\s*f['\\\"]"
+    ],
+    "asvs_controls": [
+      "V1.2.7"
+    ]
+  },
+  "SVG_SCRIPT_SANITIZATION": {
+    "rule_id": "SVG_SCRIPT_SANITIZATION",
+    "name": "Unsanitized SVG Upload/Render",
+    "owasp": "A03",
+    "cwe": "CWE-79",
+    "description": "User-supplied SVG is accepted for upload or served/rendered without stripping <script>/<foreignObject> tags via a sanitizer",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [
+      "request.files",
+      "req.files"
+    ],
+    "sinks": [
+      "save",
+      "send_file",
+      "Response",
+      "res.send",
+      "res.sendFile"
+    ],
+    "patterns": [
+      "DFG_FLOW"
+    ],
+    "sanitizers": [
+      "bleach",
+      "DOMPurify",
+      "sanitize"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?i)ALLOWED_EXTENSIONS\\s*=\\s*\\{[^}]*['\\\"]svg['\\\"][^}]*\\}(?![\\s\\S]{0,600}(?:bleach|DOMPurify|sanitize))",
+      "(?i)mimetype\\s*=\\s*['\\\"]image/svg\\+xml['\\\"](?![\\s\\S]{0,300}(?:bleach|DOMPurify|sanitize))"
+    ],
+    "asvs_controls": [
+      "V1.3.4"
+    ]
+  },
+  "SCRIPTABLE_TEMPLATE_SANITIZATION": {
+    "rule_id": "SCRIPTABLE_TEMPLATE_SANITIZATION",
+    "name": "Scriptable Template Renderer Allows Raw HTML",
+    "owasp": "A03",
+    "cwe": "CWE-79",
+    "description": "A Markdown/template renderer is configured to allow raw HTML output, or its output is injected into the DOM without a sanitizer step",
+    "severity": "high",
+    "languages": [
+      "javascript",
+      "typescript"
+    ],
+    "sources": [
+      "req.query",
+      "req.body",
+      "req.params"
+    ],
+    "sinks": [
+      "marked",
+      "dangerouslySetInnerHTML"
+    ],
+    "patterns": [
+      "DFG_FLOW"
+    ],
+    "sanitizers": [
+      "DOMPurify",
+      "sanitize"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "marked\\s*\\([^,]+,\\s*\\{\\s*sanitize\\s*:\\s*false",
+      "dangerouslySetInnerHTML\\s*=\\s*\\{\\{\\s*__html\\s*:\\s*(?:markdownToHtml|marked|md\\.render)\\s*\\("
+    ],
+    "asvs_controls": [
+      "V1.3.5"
+    ]
+  },
+  "FORMAT_STRING_INJECTION": {
+    "rule_id": "FORMAT_STRING_INJECTION",
+    "name": "Format String Injection",
+    "owasp": "A03",
+    "cwe": "CWE-134",
+    "description": "User input is used as the format string itself (not just an argument), allowing attribute/method injection via .format() or %-formatting",
+    "severity": "medium",
+    "languages": [
+      "python"
+    ],
+    "sources": [
+      "request.args",
+      "request.form",
+      "request.json",
+      "request.values"
+    ],
+    "sinks": [
+      "format"
+    ],
+    "patterns": [
+      "DFG_FLOW"
+    ],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "request\\.(?:args|form|json|values)(?:\\.get\\([^)]*\\)|\\[[^\\]]*\\])?\\s*\\.format\\s*\\(",
+      "(\\w+)\\s*=\\s*request\\.(?:args|form|json|values)(?:\\.get\\([^)]*\\)|\\[[^\\]]*\\])?[\\s\\S]{0,150}\\1\\.format\\s*\\(",
+      "request\\.(?:args|form|json|values)(?:\\.get\\([^)]*\\)|\\[[^\\]]*\\])?\\s*%\\s*\\("
+    ],
+    "asvs_controls": [
+      "V1.3.10"
+    ]
+  },
+  "EMAIL_HEADER_INJECTION": {
+    "rule_id": "EMAIL_HEADER_INJECTION",
+    "name": "SMTP/IMAP Header Injection",
+    "owasp": "A03",
+    "cwe": "CWE-93",
+    "description": "An email header (To/Cc/Bcc/Subject) is built via concatenation with user input with no CRLF-stripping or validation",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [
+      "request.args",
+      "request.form",
+      "request.json",
+      "req.query",
+      "req.body",
+      "req.params"
+    ],
+    "sinks": [
+      "msg",
+      "sendmail",
+      "sendMail"
+    ],
+    "patterns": [
+      "DFG_FLOW"
+    ],
+    "sanitizers": [
+      "validate_email",
+      "sanitizeHeader"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "msg\\s*\\[\\s*['\\\"](?:To|Cc|Bcc|Subject|From|Reply-To)['\\\"]\\s*\\]\\s*=\\s*[^\\n]*\\+\\s*(?:request\\.|req\\.)",
+      "headers\\s*\\[\\s*['\\\"](?:To|Cc|Bcc|Subject)['\\\"]\\s*\\]\\s*=\\s*[^\\n]*\\+\\s*(?:request\\.|req\\.)",
+      "\\b(?:to|cc|bcc|subject)\\b\\s*:\\s*[^,\\n}]*\\+\\s*(?:req\\.|request\\.)",
+      "\\b(?:to|cc|bcc|subject)\\b\\s*:\\s*`[^`]*\\$\\{[^}]*(?:req\\.|request\\.)"
+    ],
+    "asvs_controls": [
+      "V1.3.11"
+    ]
+  },
+  "PASSWORD_MAX_LENGTH_TOO_SHORT": {
+    "rule_id": "PASSWORD_MAX_LENGTH_TOO_SHORT",
+    "name": "Password Maximum Length Below 64 Characters",
+    "owasp": "A07",
+    "cwe": "CWE-521",
+    "description": "A password field or validator caps password length below the ASVS-required minimum of 64 characters, rejecting valid passphrases and password-manager-generated passwords",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "<input(?=[^>]*type=[\\\"']password[\\\"'])(?=[^>]*maxlength\\s*=\\s*[\\\"']?(?:[1-9]|[1-5][0-9]|6[0-3])(?!\\d))[^>]*>",
+      "len\\s*\\(\\s*password\\s*\\)\\s*>\\s*(?:[1-9]|[1-5][0-9]|6[0-3])(?!\\d)",
+      "(?i)(?:max_password_length|password_max_length)\\s*[:=]\\s*(?:[1-9]|[1-5][0-9]|6[0-3])(?!\\d)",
+      "password[\\s\\S]{0,20}\\.max\\s*\\(\\s*(?:[1-9]|[1-5][0-9]|6[0-3])(?!\\d)\\s*\\)"
+    ],
+    "asvs_controls": [
+      "V6.2.9"
+    ]
+  },
+  "WEAK_OTP_ENTROPY": {
+    "rule_id": "WEAK_OTP_ENTROPY",
+    "name": "OTP/Lookup Secret Below Minimum Entropy",
+    "owasp": "A07",
+    "cwe": "CWE-330",
+    "description": "An OTP, verification code, or lookup secret is generated from a numeric range or charset providing fewer than roughly 20 bits of entropy, regardless of whether the underlying RNG is a CSPRNG",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [
+      "random.randint",
+      "random.randrange",
+      "secrets.randbelow",
+      "crypto.randomInt",
+      "Math.random"
+    ],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "random\\.randint\\s*\\(\\s*\\d+\\s*,\\s*\\d{1,5}\\s*\\)",
+      "random\\.randrange\\s*\\(\\s*\\d{1,5}\\s*\\)",
+      "secrets\\.randbelow\\s*\\(\\s*\\d{1,5}\\s*\\)",
+      "Math\\.floor\\s*\\(\\s*Math\\.random\\s*\\(\\s*\\)\\s*\\*\\s*\\d{1,5}\\s*\\)",
+      "crypto\\.randomInt\\s*\\(\\s*\\d{1,5}\\s*\\)"
+    ],
+    "asvs_controls": [
+      "V6.5.4"
+    ]
+  },
+  "OTP_ENDPOINT_RATE_LIMITING": {
+    "rule_id": "OTP_ENDPOINT_RATE_LIMITING",
+    "name": "Rate Limiting Marker Near OTP Verification Endpoint",
+    "owasp": "A07",
+    "cwe": "CWE-307",
+    "description": "Informational marker for a rate-limiting decorator/middleware found near an OTP or verification-code endpoint (control V6.6.3).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.(?:route|get|post)\\s*\\(\\s*[\"'][^\"']*(?:otp|verify[-_]?code|verification|verify_otp|otp_verify)[^\"']*[\"'][^\\n]*\\)[\\s\\S]{0,200}@(?:limiter\\.limit|rate_limit)\\s*\\(",
+      "@(?:limiter\\.limit|rate_limit)\\s*\\([^)]*\\)[\\s\\S]{0,200}@(?:app|bp|router|\\w+)\\.(?:route|get|post)\\s*\\(\\s*[\"'][^\"']*(?:otp|verify[-_]?code|verification|verify_otp|otp_verify)[^\"']*[\"']",
+      "(?:otp|verify[-_]?code|verification)[^\\n]*[\\s\\S]{0,150}(?:rateLimit\\s*\\(|express-rate-limit)",
+      "(?:rateLimit\\s*\\(|express-rate-limit)[\\s\\S]{0,150}(?:otp|verify[-_]?code|verification)"
+    ],
+    "asvs_controls": [
+      "V6.6.3"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "OUTPUT_ENCODING_NOT_FINAL_STEP": {
+    "rule_id": "OUTPUT_ENCODING_NOT_FINAL_STEP",
+    "name": "Output Encoding Not Applied as Final Step",
+    "owasp": "A03",
+    "cwe": "CWE-116",
+    "description": "Untrusted data is escaped or encoded and then concatenated with additional untrusted input before reaching an interpreter, so output encoding is not the final operation.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(\\w+)\\s*=\\s*(?:html\\.escape|markupsafe\\.escape|escape|encodeURIComponent)\\s*\\(\\s*(?:request\\.(?:args|form|json|values)(?:\\.get\\([^)]*\\)|\\[[^\\]]*\\])?|req\\.(?:query|body|params)\\.[a-zA-Z_]\\w*)\\s*\\)[\\s\\S]{0,200}\\1\\s*\\+\\s*(?:request\\.(?:args|form|json|values)(?:\\.get\\([^)]*\\)|\\[[^\\]]*\\])?|req\\.(?:query|body|params)\\.[a-zA-Z_]\\w*)",
+      "(\\w+)\\s*=\\s*(?:html\\.escape|markupsafe\\.escape|escape|encodeURIComponent)\\s*\\([^\\n]*\\)[\\s\\S]{0,200}(?:make_response|render_template_string|res\\.send|\\.innerHTML\\s*=)[^\\n]*\\1\\s*\\+\\s*(?:request\\.|req\\.)"
+    ],
+    "asvs_controls": [
+      "V1.1.2"
+    ]
+  },
+  "LATEX_INJECTION": {
+    "rule_id": "LATEX_INJECTION",
+    "name": "LaTeX Injection",
+    "owasp": "A03",
+    "cwe": "CWE-94",
+    "description": "User-controlled content is inserted into LaTeX source without escaping control characters, or LaTeX compilation is run with shell escape enabled.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "escape_latex",
+      "sanitize_latex",
+      "latex_escape"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:pdflatex|xelatex|lualatex|latex)[^\\n]*(?:--shell-escape|-shell-escape)",
+      "subprocess\\.(?:run|Popen|call|check_call|check_output)\\s*\\([^\\n]*(?:pdflatex|xelatex|lualatex|latex)[^\\n]*(?:--shell-escape|-shell-escape)",
+      "(?:tex|latex|document)\\s*=\\s*(?![^\\n]*(?:escape_latex|sanitize_latex|latex_escape))(?:f['\"][^\\n]*(?:request\\.(?:args|form|json|values)|req\\.(?:query|body|params))|[^\\n]*(?:\\+\\s*(?:request\\.|req\\.)|(?:request\\.|req\\.)[^\\n]*\\+))",
+      "\\.write\\s*\\((?![^\\n]*(?:escape_latex|sanitize_latex|latex_escape))[^\\n]*(?:request\\.(?:args|form|json|values)|req\\.(?:query|body|params))"
+    ],
+    "asvs_controls": [
+      "V1.2.8"
+    ]
+  },
+  "JNDI_INJECTION": {
+    "rule_id": "JNDI_INJECTION",
+    "name": "JNDI Injection",
+    "owasp": "A03",
+    "cwe": "CWE-74",
+    "description": "A JNDI lookup name is built from request data through concatenation before being passed to InitialContext.lookup().",
+    "severity": "critical",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript",
+      "java"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "allowlist",
+      "validateJndiName"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:new\\s+)?InitialContext\\s*\\([^)]*\\)\\.lookup\\s*\\([^\\n]*(?:\\+\\s*(?:request\\.|req\\.|request\\.getParameter)|(?:request\\.|req\\.|request\\.getParameter)[^\\n]*\\+)",
+      "(\\w+)\\s*=\\s*(?:request\\.getParameter\\s*\\([^)]*\\)|request\\.(?:args|form|json)(?:\\.get\\([^)]*\\)|\\[[^\\]]*\\])?|req\\.(?:query|body|params)\\.[a-zA-Z_]\\w*)[\\s\\S]{0,200}(?:InitialContext\\s*\\([^)]*\\)\\.)?lookup\\s*\\([^\\n]*\\+\\s*\\1\\b"
+    ],
+    "asvs_controls": [
+      "V1.3.8"
+    ]
+  },
+  "MEMCACHE_INJECTION": {
+    "rule_id": "MEMCACHE_INJECTION",
+    "name": "Memcache Injection",
+    "owasp": "A03",
+    "cwe": "CWE-74",
+    "description": "A memcache key or value is built through concatenation with untrusted input and passed to get/set without key sanitization.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "sanitize_key",
+      "validate_cache_key",
+      "quote"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:memcache|memcached|cache|client)\\.(?:get|set)\\s*\\([^\\n]*(?:\\+\\s*(?:request\\.|req\\.)|(?:request\\.|req\\.)[^\\n]*\\+)(?![^\\n]*(?:sanitize_key|validate_cache_key|quote))",
+      "(\\w+)\\s*=\\s*[^\\n]*(?:\\+\\s*(?:request\\.|req\\.)|(?:request\\.|req\\.)[^\\n]*\\+)(?![^\\n]*(?:sanitize_key|validate_cache_key|quote))[\\s\\S]{0,200}(?:memcache|memcached|cache|client)\\.(?:get|set)\\s*\\(\\s*\\1\\b"
+    ],
+    "asvs_controls": [
+      "V1.3.9"
+    ]
+  },
+  "BUSINESS_ENDPOINT_ANTI_AUTOMATION_MARKER": {
+    "rule_id": "BUSINESS_ENDPOINT_ANTI_AUTOMATION_MARKER",
+    "name": "Anti-Automation Marker Near Business-Critical Endpoint",
+    "owasp": "A04",
+    "cwe": "CWE-770",
+    "description": "Compliant marker for a rate-limit or CAPTCHA control near checkout, bulk export, invite-sending, or similar business-critical endpoints.",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.(?:route|get|post)\\s*\\(\\s*['\"][^'\"]*(?:checkout|bulk[-_]?export|send[-_]?invite|invite[-_]?users|purchase)[^'\"]*['\"][^\\n]*\\)[\\s\\S]{0,220}@(?:limiter\\.limit|rate_limit|captcha_required|require_captcha)\\s*\\(",
+      "@(?:limiter\\.limit|rate_limit|captcha_required|require_captcha)\\s*\\([^)]*\\)[\\s\\S]{0,220}@(?:app|bp|router|\\w+)\\.(?:route|get|post)\\s*\\(\\s*['\"][^'\"]*(?:checkout|bulk[-_]?export|send[-_]?invite|invite[-_]?users|purchase)[^'\"]*['\"]",
+      "(?:checkout|bulk[-_]?export|send[-_]?invite|invite[-_]?users|purchase)[\\s\\S]{0,180}(?:rateLimit\\s*\\(|express-rate-limit|captcha|recaptcha)",
+      "(?:rateLimit\\s*\\(|express-rate-limit|captcha|recaptcha)[\\s\\S]{0,180}(?:checkout|bulk[-_]?export|send[-_]?invite|invite[-_]?users|purchase)"
+    ],
+    "asvs_controls": [
+      "V2.4.1"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "FORCED_PERIODIC_PASSWORD_ROTATION": {
+    "rule_id": "FORCED_PERIODIC_PASSWORD_ROTATION",
+    "name": "Forced Periodic Password Rotation",
+    "owasp": "A07",
+    "cwe": "CWE-521",
+    "description": "Password age or expiry is used to block login and force password reset without a compromise or risk signal.",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "compromised",
+      "breach",
+      "risk"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:password_expires_at|passwordExpiry|password_expiry|password_age_days|PASSWORD_MAX_AGE_DAYS)[\\s\\S]{0,220}(?:force_password_reset|must_change_password|password_reset_required|redirect\\s*\\([^\\n]*(?:reset|change-password)|raise\\s+PasswordExpired)",
+      "(?:force_password_reset|must_change_password|password_reset_required)[\\s\\S]{0,220}(?:password_expires_at|passwordExpiry|password_expiry|password_age_days|PASSWORD_MAX_AGE_DAYS)"
+    ],
+    "asvs_controls": [
+      "V6.2.10"
+    ]
+  },
+  "CONTEXT_SPECIFIC_PASSWORD_BLOCKLIST_MARKER": {
+    "rule_id": "CONTEXT_SPECIFIC_PASSWORD_BLOCKLIST_MARKER",
+    "name": "Context-Specific Password Blocklist Marker",
+    "owasp": "A07",
+    "cwe": "CWE-521",
+    "description": "Compliant marker for password validation that checks application-specific blocked terms such as company, product, tenant, app, or brand names.",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:CONTEXT|APP|PRODUCT|COMPANY|BRAND|TENANT)[-_]?(?:BANNED|BLOCKED|DENIED)[-_]?(?:WORDS|TERMS)",
+      "(?:company_name|product_name|app_name|brand_name|tenant_name)[\\s\\S]{0,180}(?:password|passwd|pwd)",
+      "(?:password|passwd|pwd)[\\s\\S]{0,180}(?:company_name|product_name|app_name|brand_name|tenant_name)"
+    ],
+    "asvs_controls": [
+      "V6.2.11"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "OTP_SINGLE_USE_NOT_ENFORCED": {
+    "rule_id": "OTP_SINGLE_USE_NOT_ENFORCED",
+    "name": "OTP or Lookup Secret Can Be Reused",
+    "owasp": "A07",
+    "cwe": "CWE-287",
+    "description": "An OTP or lookup-secret verification path checks the code but does not delete, invalidate, consume, or mark it used after success.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "delete",
+      "invalidate",
+      "consume",
+      "used_at",
+      "mark_used"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "def\\s+\\w*(?:verify|validate|check)\\w*(?:otp|code|lookup|recovery)\\w*\\s*\\([^)]*\\)\\s*:(?![\\s\\S]{0,500}(?:delete|invalidate|consume|mark_used|used_at|is_used\\s*=\\s*True))[\\s\\S]{0,500}(?:otp|code|lookup_secret|recovery_code)[\\s\\S]{0,120}(?:==|compare_digest)",
+      "(?:app|router)\\.(?:post|get)\\s*\\(\\s*['\"][^'\"]*(?:otp|verify|recovery|lookup)[^'\"]*['\"][\\s\\S]{0,500}(?!(?:[\\s\\S]{0,500})(?:delete|invalidate|consume|markUsed|usedAt|isUsed\\s*=\\s*true))[\\s\\S]{0,500}(?:otp|code|recoveryCode|lookupSecret)[\\s\\S]{0,120}(?:===|==|compare)"
+    ],
+    "asvs_controls": [
+      "V6.5.1"
+    ]
+  },
+  "PLAINTEXT_LOOKUP_SECRET_STORAGE": {
+    "rule_id": "PLAINTEXT_LOOKUP_SECRET_STORAGE",
+    "name": "Lookup Secret Stored in Plaintext",
+    "owasp": "A02",
+    "cwe": "CWE-256",
+    "description": "Low-entropy lookup secrets such as recovery codes or API keys are stored in plaintext model/schema fields instead of salted hashes.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "hash",
+      "hashed",
+      "bcrypt",
+      "argon2",
+      "scrypt",
+      "pbkdf2"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?<!hashed_)\\b(?:recovery_code|lookup_secret|backup_code|api_key|apikey)\\b\\s*=\\s*(?:Column|models\\.CharField|StringField|db\\.Column)\\s*\\(",
+      "(?:recoveryCode|lookupSecret|backupCode|apiKey)\\s*:\\s*(?:String|DataTypes\\.STRING)(?![\\s\\S]{0,120}(?:hash|hashed|bcrypt|argon2|scrypt|pbkdf2))",
+      "(?<!hashed_)\\b(?:recovery_code|lookup_secret|backup_code|api_key|apikey)\\b\\s*=\\s*(?:request\\.|req\\.|code\\b|token\\b)(?![^\\n]*(?:hash|hashed|bcrypt|argon2|scrypt|pbkdf2))"
+    ],
+    "asvs_controls": [
+      "V6.5.2"
+    ]
+  },
+  "OTP_OOB_LIFETIME_TOO_LONG": {
+    "rule_id": "OTP_OOB_LIFETIME_TOO_LONG",
+    "name": "OTP or OOB Code Lifetime Too Long",
+    "owasp": "A07",
+    "cwe": "CWE-613",
+    "description": "OTP or out-of-band verification codes are generated without an expiry, or with a lifetime above ASVS limits.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "expires_at",
+      "expiresIn",
+      "ttl",
+      "setex",
+      "valid_for",
+      "timedelta"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:otp|oob|verification|code)\\s*=\\s*(?:generate_otp|generate_code|secrets\\.|random\\.)(?![\\s\\S]{0,300}(?:expires_at|expiresIn|expiry|ttl|setex|valid_for|timedelta))",
+      "(?:otp|oob|verification|code)[\\s\\S]{0,160}(?:timedelta\\s*\\(\\s*minutes\\s*=\\s*(?:1[1-9]|[2-9]\\d)|expires_?in\\s*=\\s*(?:[6-9]\\d{2}|[1-9]\\d{3,}))",
+      "TOTP\\s*\\([^)]*interval\\s*=\\s*(?:3[1-9]|[4-9]\\d|[1-9]\\d{2,})",
+      "(?:totp|otp|oob)[\\s\\S]{0,120}(?:ttl|max_age|expiresIn)\\s*[:=]\\s*(?:[6-9]\\d{2}|[1-9]\\d{3,})"
+    ],
+    "asvs_controls": [
+      "V6.5.5"
+    ]
+  },
+  "SESSION_ABSOLUTE_LIFETIME_MARKER": {
+    "rule_id": "SESSION_ABSOLUTE_LIFETIME_MARKER",
+    "name": "Absolute Session Lifetime Marker",
+    "owasp": "A07",
+    "cwe": "CWE-613",
+    "description": "Compliant marker for a hard session or token lifetime independent of inactivity timeout.",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:ABSOLUTE_SESSION_LIFETIME|SESSION_ABSOLUTE_TIMEOUT|SESSION_MAX_AGE|MAX_SESSION_AGE)\\s*[:=]",
+      "(?:absolute_session_timeout|absoluteTimeout|maxSessionAge)\\s*[:=]",
+      "(?:jwt\\.encode|jwt\\.sign)\\s*\\([^\\n]*(?:[\\\"']exp[\\\"']|expiresIn)",
+      "(?:payload|claims)\\s*=\\s*\\{[^}]*[\\\"']exp[\\\"']\\s*:"
+    ],
+    "asvs_controls": [
+      "V7.3.2"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "OAUTH_AUTHZ_MISSING_STATE_PKCE": {
+    "rule_id": "OAUTH_AUTHZ_MISSING_STATE_PKCE",
+    "name": "OAuth Authorization Request Missing State or PKCE",
+    "owasp": "A07",
+    "cwe": "CWE-352",
+    "description": "OAuth authorization request construction lacks CSRF replay protection through state and PKCE code_challenge.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "state",
+      "code_challenge",
+      "codeChallenge",
+      "pkce"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "authorization_url\\s*=\\s*(?![^\\n]*(?:state|code_challenge|codeChallenge|pkce))[^\\n]*(?:authorize|authorization_endpoint|/oauth/authorize)",
+      "(?:oauth|client)\\.authorization_url\\s*\\((?![^)]*(?:state|code_challenge|codeChallenge|pkce))[^)]*\\)",
+      "new\\s+URLSearchParams\\s*\\(\\s*\\{(?=[\\s\\S]{0,300}(?:response_type|client_id|redirect_uri))(?![\\s\\S]{0,300}(?:state|code_challenge|codeChallenge|pkce))[\\s\\S]{0,300}\\}\\s*\\)"
+    ],
+    "asvs_controls": [
+      "V10.2.1"
+    ]
+  },
+  "OAUTH_TOKEN_REQUEST_NO_CLIENT_AUTH": {
+    "rule_id": "OAUTH_TOKEN_REQUEST_NO_CLIENT_AUTH",
+    "name": "OAuth Token Request Missing Client Authentication",
+    "owasp": "A07",
+    "cwe": "CWE-287",
+    "description": "OAuth confidential client token request is sent to the token endpoint without client_secret, client_assertion, Authorization header, or auth parameter.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "client_secret",
+      "client_assertion",
+      "Authorization",
+      "auth="
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "requests\\.post\\s*\\((?![\\s\\S]{0,350}(?:client_secret|client_assertion|[\\\"']Authorization[\\\"']|auth\\s*=))[\\s\\S]{0,350}(?:/token|token_endpoint)",
+      "httpx\\.post\\s*\\((?![\\s\\S]{0,350}(?:client_secret|client_assertion|[\\\"']Authorization[\\\"']|auth\\s*=))[\\s\\S]{0,350}(?:/token|token_endpoint)",
+      "axios\\.post\\s*\\((?![\\s\\S]{0,350}(?:client_secret|client_assertion|[\\\"']Authorization[\\\"']|auth\\s*:))[\\s\\S]{0,350}(?:/token|tokenEndpoint)",
+      "fetch\\s*\\((?![\\s\\S]{0,350}(?:client_secret|client_assertion|[\\\"']Authorization[\\\"']))[\\s\\S]{0,350}(?:/token|tokenEndpoint)"
+    ],
+    "asvs_controls": [
+      "V10.4.10"
+    ]
+  },
+  "ID_TOKEN_NONCE_NOT_CHECKED": {
+    "rule_id": "ID_TOKEN_NONCE_NOT_CHECKED",
+    "name": "ID Token Nonce Not Checked",
+    "owasp": "A07",
+    "cwe": "CWE-345",
+    "description": "ID token validation decodes or verifies an ID token without comparing the nonce claim to the authorization-session nonce.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "check_nonce",
+      "validate_nonce",
+      "nonce"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?![\\s\\S]{0,500}(?:check_nonce|validate_nonce|nonce\\s*(?:==|===)|nonce[^\\n]*(?:session|stored|expected)))(?:claims|payload)\\s*=\\s*jwt\\.decode\\s*\\(\\s*(?:id_token|idToken)",
+      "(?![\\s\\S]{0,500}(?:check_nonce|validate_nonce|nonce\\s*(?:==|===)|nonce[^\\n]*(?:session|stored|expected)))jwt\\.verify\\s*\\(\\s*(?:id_token|idToken)",
+      "(?![\\s\\S]{0,500}(?:check_nonce|validate_nonce|nonce\\s*(?:==|===)|nonce[^\\n]*(?:session|stored|expected)))verifyIdToken\\s*\\(\\s*(?:idToken|id_token)"
+    ],
+    "asvs_controls": [
+      "V10.5.1"
+    ]
+  },
+  "WEAK_SIGNATURE_HASH_COLLISION": {
+    "rule_id": "WEAK_SIGNATURE_HASH_COLLISION",
+    "name": "Weak Collision-Resistance Hash for Signature or Integrity",
+    "owasp": "A02",
+    "cwe": "CWE-327",
+    "description": "SHA-1 or MD5 is used where collision resistance is required, such as digital signatures or integrity checks.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:signature|sign|verify|integrity|checksum)[^\\n]*(?:hashlib\\.(?:sha1|md5)|crypto\\.createHash\\s*\\(\\s*['\"](?:sha1|md5)['\"]|SHA1|MD5)",
+      "(?:hashlib\\.(?:sha1|md5)|crypto\\.createHash\\s*\\(\\s*['\"](?:sha1|md5)['\"]|SHA1|MD5)[^\\n]*(?:signature|sign|verify|integrity|checksum)",
+      "(?:Signature|PKCS1_v1_5|DSS)\\.[^\\n]*(?:SHA1|MD5)"
+    ],
+    "asvs_controls": [
+      "V11.4.3"
+    ]
+  },
+  "WEAK_KDF_PARAMETERS": {
+    "rule_id": "WEAK_KDF_PARAMETERS",
+    "name": "Weak KDF Stretching Parameters",
+    "owasp": "A02",
+    "cwe": "CWE-916",
+    "description": "PBKDF2 or scrypt is configured with stretching parameters below current guidance.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "PBKDF2HMAC\\s*\\([\\s\\S]{0,220}iterations\\s*=\\s*(?:[1-9]\\d{0,4}|[1-5]\\d{5})\\b",
+      "pbkdf2(?:Sync)?\\s*\\([^\\n]*(?:,\\s*)?(?:[1-9]\\d{0,4}|[1-5]\\d{5})\\s*,",
+      "scrypt\\s*\\([^\\n]*(?:n|N|cost)\\s*=\\s*(?:1024|2048|4096|8192)\\b",
+      "scryptSync\\s*\\([^\\n]*(?:N|cost)\\s*:\\s*(?:1024|2048|4096|8192)\\b"
+    ],
+    "asvs_controls": [
+      "V11.4.4"
+    ]
+  },
+  "PLAINTEXT_BACKEND_CONNECTION": {
+    "rule_id": "PLAINTEXT_BACKEND_CONNECTION",
+    "name": "Plaintext Backend Connection",
+    "owasp": "A02",
+    "cwe": "CWE-319",
+    "description": "Backend, database, API, or outbound HTTP client connections use http:// instead of TLS-protected https:// endpoints.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "https://"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:DATABASE_URL|REDIS_URL|API_BASE_URL|BACKEND_URL|SERVICE_URL|WEBHOOK_URL|TOKEN_ENDPOINT)\\s*[:=]\\s*['\"]http://(?!localhost|127\\.0\\.0\\.1)",
+      "(?:requests|httpx)\\.(?:get|post|put|delete|request)\\s*\\(\\s*['\"]http://(?!localhost|127\\.0\\.0\\.1)",
+      "(?:axios\\.(?:get|post|put|delete)|fetch)\\s*\\(\\s*['\"]http://(?!localhost|127\\.0\\.0\\.1)",
+      "(?:SQLALCHEMY_DATABASE_URI|MONGO_URI|ELASTICSEARCH_URL)\\s*[:=]\\s*['\"]http://(?!localhost|127\\.0\\.0\\.1)"
+    ],
+    "asvs_controls": [
+      "V12.3.1"
+    ]
+  },
+  "SESSION_INACTIVITY_TIMEOUT_MARKER": {
+    "rule_id": "SESSION_INACTIVITY_TIMEOUT_MARKER",
+    "name": "Session Inactivity Timeout Marker",
+    "owasp": "A07",
+    "cwe": "CWE-613",
+    "description": "Informational marker for a session inactivity timeout being configured (PERMANENT_SESSION_LIFETIME, session.permanent, a session cookie maxAge, or a short-lived JWT exp claim).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "PERMANENT_SESSION_LIFETIME",
+      "session\\.permanent\\s*=\\s*True",
+      "maxAge\\s*:\\s*\\d+",
+      "[\"']exp[\"']\\s*:\\s*"
+    ],
+    "asvs_controls": [
+      "V7.3.1"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "SENSITIVE_CHANGE_NO_REAUTH": {
+    "rule_id": "SENSITIVE_CHANGE_NO_REAUTH",
+    "name": "Sensitive Account Change Without Re-authentication",
+    "owasp": "A07",
+    "cwe": "CWE-620",
+    "description": "A route that changes email, phone, or MFA settings has no password/re-authentication check visible in the handler",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "current_password",
+      "verify_password",
+      "verifyPassword",
+      "reauth"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.route\\s*\\(\\s*[\"'][^\"']*(?:change[-_]?email|change[-_]?phone|update[-_]?email|update[-_]?phone|mfa|2fa|two[-_]?factor)[^\"']*[\"'][^\\n]*\\)(?![\\s\\S]{0,250}(?:current_password|reauth|re_auth|verify_password|require_password|confirm_password))[\\s\\S]{0,250}def\\s+\\w+\\(",
+      "@(?:app|bp|router|\\w+)\\.(?:post|put|patch)\\s*\\(\\s*[\"'][^\"']*(?:change[-_]?email|change[-_]?phone|update[-_]?email|update[-_]?phone|mfa|2fa|two[-_]?factor)[^\"']*[\"'][^\\n]*\\)(?![\\s\\S]{0,250}(?:current_password|reauth|re_auth|verify_password|require_password|confirm_password))[\\s\\S]{0,250}def\\s+\\w+\\(",
+      "(?:router|app)\\.(?:post|put|patch)\\s*\\(\\s*[\"'][^\"']*(?:change-email|change-phone|update-email|mfa|2fa|two-factor)[^\"']*[\"']\\s*,(?![\\s\\S]{0,250}(?:currentPassword|reauth|verifyPassword|requirePassword|confirmPassword))"
+    ],
+    "asvs_controls": [
+      "V7.5.1"
+    ]
+  },
+  "EXCESSIVE_DATA_EXPOSURE_BOPLA": {
+    "rule_id": "EXCESSIVE_DATA_EXPOSURE_BOPLA",
+    "name": "Excessive Data Exposure via Full Object Serialization",
+    "owasp": "A01",
+    "cwe": "CWE-213",
+    "description": "An API response serializes an entire model object (jsonify(obj.__dict__), vars(obj), or a bare res.json(obj)) with no explicit field allowlist",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [
+      "jsonify",
+      "res.json"
+    ],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "jsonify\\s*\\(\\s*\\w+\\.__dict__\\s*\\)",
+      "jsonify\\s*\\(\\s*vars\\s*\\(\\s*\\w+\\s*\\)\\s*\\)",
+      "res\\.json\\s*\\(\\s*(?!(?:safe|public|dto|response|payload|result)\\w*\\b)(?:user|account|profile|customer|member|order|admin|session)\\w*\\s*\\)"
+    ],
+    "asvs_controls": [
+      "V8.2.3"
+    ]
+  },
+  "HANDROLLED_CRYPTO_PRIMITIVE": {
+    "rule_id": "HANDROLLED_CRYPTO_PRIMITIVE",
+    "name": "Hand-Rolled Cryptographic Primitive",
+    "owasp": "A02",
+    "cwe": "CWE-327",
+    "description": "A custom cryptographic primitive (e.g. a manual XOR cipher) is used instead of an industry-validated library such as cryptography, pycryptodome, or the Node crypto module",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "ord\\s*\\([^)]*\\)\\s*\\^\\s*ord\\s*\\([^)]*(?:key|password|secret)",
+      "\\^\\s*ord\\s*\\(\\s*(?:key|password|secret)",
+      "\\.charCodeAt\\s*\\([^)]*\\)\\s*\\^\\s*(?:key|password|secret)\\w*\\.charCodeAt\\s*\\(",
+      "(?:key|password|secret)\\w*\\.charCodeAt\\s*\\([^)]*\\)\\s*\\^",
+      "[a-zA-Z_]\\w*\\s*\\[[^\\]]+\\]\\s*\\^\\s*(?:key|password|secret)\\w*\\s*\\[[^\\]]+\\]",
+      "(?:key|password|secret)\\w*\\s*\\[[^\\]]+\\]\\s*\\^\\s*[a-zA-Z_]\\w*\\s*\\[[^\\]]+\\]"
+    ],
+    "asvs_controls": [
+      "V11.2.1"
+    ]
+  },
+  "OUTBOUND_REQUEST_ALLOWLIST_CHECK": {
+    "rule_id": "OUTBOUND_REQUEST_ALLOWLIST_CHECK",
+    "name": "Outbound Request Allowlist Marker",
+    "owasp": "A10",
+    "cwe": "CWE-918",
+    "description": "Informational marker for an ALLOWED_HOSTS/allowlist check found near an outbound HTTP call site (control V13.2.4).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:ALLOWED_HOSTS|ALLOWED\\w*\\.has|allowedHosts|allowlist|is_allowed_webhook)\\w*[\\s\\S]{0,300}(?:requests\\.(?:get|post)|axios\\.(?:get|post)|fetch\\s*\\(|httpx\\.(?:get|post))\\s*\\(",
+      "(?:requests\\.(?:get|post)|axios\\.(?:get|post)|fetch\\s*\\(|httpx\\.(?:get|post))\\s*\\([^\\n]*\\)[\\s\\S]{0,300}(?:ALLOWED_HOSTS|ALLOWED\\w*\\.has|allowedHosts|allowlist|is_allowed_webhook)"
+    ],
+    "asvs_controls": [
+      "V13.2.4"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "JS_LOOSE_EQUALITY_SECURITY_CHECK": {
+    "rule_id": "JS_LOOSE_EQUALITY_SECURITY_CHECK",
+    "name": "Loose Equality Used for Security-Relevant Comparison",
+    "owasp": "A04",
+    "cwe": "CWE-697",
+    "description": "JavaScript loose equality (== / !=) is used to compare an auth token, role, or ID instead of strict equality (=== / !==)",
+    "severity": "medium",
+    "languages": [
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "\\b(?:token|password|role|isAdmin|userId|user_id|secret|apiKey|api_key|sessionId|session_id)\\b\\s*==(?!=)",
+      "==(?!=)\\s*\\b(?:token|password|role|isAdmin|userId|user_id|secret|apiKey|api_key|sessionId|session_id)\\b",
+      "\\b(?:token|password|role|isAdmin|userId|user_id|secret|apiKey|api_key|sessionId|session_id)\\b\\s*!=(?!=)",
+      "!=(?!=)\\s*\\b(?:token|password|role|isAdmin|userId|user_id|secret|apiKey|api_key|sessionId|session_id)\\b"
+    ],
+    "asvs_controls": [
+      "V15.3.5"
+    ]
   }
 }

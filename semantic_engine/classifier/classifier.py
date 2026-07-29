@@ -635,17 +635,30 @@ class SliceClassifier:
                     return True
             # ReDoS: no nested quantifiers in regex pattern → not catastrophic.
             # Handles Python r'...' / "..." and JS /.../ literal syntax.
-            regex_src = re.search(r"r?['\"]([^'\"]{4,})['\"]|/([^/\n]{4,})/", code)
+            regex_src = re.search(
+                r"re\.(?:compile|match|search|fullmatch)\s*\(\s*r?['\"]([^'\"]+)['\"]|"
+                r"new\s+RegExp\s*\(\s*['\"]([^'\"]+)['\"]|"
+                r"/([^/\n]{4,})/\s*\.test",
+                code,
+                re.IGNORECASE,
+            )
             if regex_src:
-                pattern_str = regex_src.group(1) or regex_src.group(2)
+                pattern_str = next(group for group in regex_src.groups() if group)
                 if not re.search(r'\([^)]*[+*?][^)]*\)\s*[+*?{]', pattern_str):
                     if re.search(r're\.\w+\s*\(|RegExp|\.test\s*\(', code, re.IGNORECASE):
                         return True
         if rule_id == "REGEX_DOS":
             # Safe if the regex pattern contains no nested quantifiers (no catastrophic backtracking).
-            regex_src = re.search(r"r?['\"]([^'\"]+)['\"]", code)
+            regex_src = re.search(
+                r"re\.(?:compile|match|search|fullmatch)\s*\(\s*r?['\"]([^'\"]+)['\"]|"
+                r"new\s+RegExp\s*\(\s*['\"]([^'\"]+)['\"]|"
+                r"/([^/\n]{4,})/\s*\.test",
+                code,
+                re.IGNORECASE,
+            )
             if regex_src:
-                if not re.search(r'\([^)]*[+*?][^)]*\)\s*[+*?{]', regex_src.group(1)):
+                pattern_str = next(group for group in regex_src.groups() if group)
+                if not re.search(r'\([^)]*[+*?][^)]*\)\s*[+*?{]', pattern_str):
                     return True
         if rule_id in ("TEMPLATE_INJECTION", "XSS"):
             if (

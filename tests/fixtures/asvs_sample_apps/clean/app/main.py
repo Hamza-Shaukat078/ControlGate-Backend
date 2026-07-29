@@ -63,7 +63,8 @@ def hash_password(password: str) -> bytes:
 
 def verify_token(token: str) -> dict:
     # V7.2.1 / V9.2.1 — signature and expiry verification both enabled (defaults)
-    return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    # V9.2.3 — audience validated against this service's identifier
+    return jwt.decode(token, SECRET_KEY, algorithms=["HS256"], audience="controlgate-api")
 
 
 def issue_token(payload: dict) -> str:

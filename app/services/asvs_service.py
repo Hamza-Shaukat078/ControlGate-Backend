@@ -538,9 +538,9 @@ class ASVSService:
         return raw.strip() if raw else fallback
 
     @staticmethod
-    def _methodology_paragraphs() -> list[str]:
+    def _methodology_paragraphs(control_count: int = 70) -> list[str]:
         return [
-            "Each of the 70 requirements is assigned one of five detection strategies, "
+            f"Each of the {control_count} requirements is assigned one of five detection strategies, "
             "chosen for how that specific requirement can actually be verified:",
             "<b>Static code analysis</b> — an AST/CFG/DFG taint engine traces untrusted "
             "input through the codebase against a catalog of vulnerability patterns; "
@@ -639,7 +639,7 @@ class ASVSService:
 
         # ── Methodology ────────────────────────────────────────────────────────
         story.append(Paragraph("Methodology", section_style))
-        for para in self._methodology_paragraphs():
+        for para in self._methodology_paragraphs(len(controls)):
             story.append(Paragraph(para, body_style))
 
         # ── Level completion ───────────────────────────────────────────────────

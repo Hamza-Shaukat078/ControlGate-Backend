@@ -56,8 +56,7 @@ class GraphEdge(BaseModel):
     label: Optional[str] = None  # Edge label (e.g., "true", "false" for conditions)
     order: Optional[int] = None  # Order of execution/arguments
 
-# changed from populate_by_name to validate_by_name 
-    model_config = {"validate_by_name": True}
+    model_config = {"populate_by_name": True}
 
 
 class SemanticGraph(BaseModel):

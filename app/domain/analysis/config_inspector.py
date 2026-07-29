@@ -1,19 +1,26 @@
 """
-Config Inspector — ASVS 5.0.0 L1 configuration checks.
+Config Inspector — ASVS 5.0.0 L1/L2 configuration checks.
 
 Unlike the taint engine / regex rule catalog (semantic_engine), these controls
 can't be answered by scanning source code for a dangerous pattern — they're
 answered by reading the deployment configuration: nginx/reverse-proxy conf,
 .env files, Dockerfiles, and YAML config. This module parses those file types
-and evaluates them against the 5 config_inspection-primary ASVS L1 controls:
+and evaluates them against the config_inspection-primary ASVS controls:
 
   V3.2.1  Content served in the correct context (CSP sandbox / Content-Disposition)
   V3.4.1  HSTS header with max-age >= 1 year
+  V3.4.3  Full Content-Security-Policy includes object-src/base-uri/frame-ancestors (L2)
+  V3.4.4  X-Content-Type-Options: nosniff header (L2)
+  V3.4.5  Referrer-Policy header (L2)
+  V3.4.6  Content-Security-Policy frame-ancestors directive (L2)
   V4.1.1  Content-Type header includes a charset
   V5.2.1  Upload size limits configured
   V5.3.1  Uploaded files not executable as server-side code
+  V13.4.3 Directory listing (autoindex) disabled (L2)
+  V13.4.4 HTTP TRACE method not allowed (L2)
+  V14.3.2 Cache-Control: no-store on sensitive (auth/account/api) locations (L2)
 
-nginx config is the primary source of truth for all five (it's where these
+nginx config is the primary source of truth for all of these (it's where these
 directives actually live in a real deployment); .env/YAML/Dockerfile provide
 supplementary, lower-confidence signal — mainly for V5.2.1 and V3.4.1, where
 app-level env vars or a security.yaml sometimes carry the same setting.
@@ -218,7 +225,75 @@ class ConfigInspector:
                 confidence=0.5,
             ))
 
+        # V3.4.4 — X-Content-Type-Options: nosniff
+        nosniff_match = re.search(
+            r"add_header\s+X-Content-Type-Options\s+[\"']?nosniff[\"']?", content, re.IGNORECASE
+        )
+        if nosniff_match:
+            findings.append(ConfigFinding(
+                "V3.4.4", "pass", path, _line_of(content, nosniff_match),
+                "X-Content-Type-Options: nosniff header directive found", confidence=0.8,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V3.4.4", "fail", path, None,
+                "No X-Content-Type-Options: nosniff header directive found in nginx config",
+                confidence=0.55,
+            ))
+
+        # V3.4.5 — Referrer-Policy
+        referrer_match = re.search(r"add_header\s+Referrer-Policy\s+[\"']?([\w-]+)", content, re.IGNORECASE)
+        if referrer_match:
+            findings.append(ConfigFinding(
+                "V3.4.5", "pass", path, _line_of(content, referrer_match),
+                f"Referrer-Policy: {referrer_match.group(1)} header directive found", confidence=0.8,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V3.4.5", "fail", path, None,
+                "No Referrer-Policy header directive found in nginx config", confidence=0.55,
+            ))
+
+        # V3.4.6 — CSP frame-ancestors
+        frame_ancestors_match = re.search(
+            r"Content-Security-Policy[^\n]*frame-ancestors", content, re.IGNORECASE
+        )
+        if frame_ancestors_match:
+            findings.append(ConfigFinding(
+                "V3.4.6", "pass", path, _line_of(content, frame_ancestors_match),
+                "Content-Security-Policy frame-ancestors directive found", confidence=0.75,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V3.4.6", "fail", path, None,
+                "No Content-Security-Policy frame-ancestors directive found in nginx config",
+                confidence=0.5,
+            ))
+
         # V3.2.1 — CSP sandbox / Content-Disposition for served content
+        csp_match = re.search(r"Content-Security-Policy[^\n]*", content, re.IGNORECASE)
+        object_none_match = re.search(r"Content-Security-Policy[^\n]*object-src\s+['\"]?none['\"]?", content, re.IGNORECASE)
+        base_none_match = re.search(r"Content-Security-Policy[^\n]*base-uri\s+['\"]?none['\"]?", content, re.IGNORECASE)
+        if csp_match and frame_ancestors_match and object_none_match and base_none_match:
+            findings.append(ConfigFinding(
+                "V3.4.3", "pass", path, _line_of(content, csp_match),
+                "Content-Security-Policy includes frame-ancestors, object-src 'none', and base-uri 'none'",
+                confidence=0.75,
+            ))
+        else:
+            missing = []
+            if not frame_ancestors_match:
+                missing.append("frame-ancestors")
+            if not object_none_match:
+                missing.append("object-src 'none'")
+            if not base_none_match:
+                missing.append("base-uri 'none'")
+            findings.append(ConfigFinding(
+                "V3.4.3", "fail", path, _line_of(content, csp_match) if csp_match else None,
+                "Content-Security-Policy missing " + ", ".join(missing),
+                confidence=0.55,
+            ))
+
         has_csp_sandbox = re.search(r"Content-Security-Policy[^;\"']*sandbox", content, re.IGNORECASE)
         has_content_disposition = re.search(r"Content-Disposition[^;]*attachment", content, re.IGNORECASE)
         upload_locations = list(re.finditer(
@@ -261,5 +336,65 @@ class ConfigInspector:
                     "Upload/media location found without a script-extension deny rule (php/py/cgi/jsp/asp)",
                     confidence=0.55,
                 ))
+
+        # V13.4.3 — directory listing (autoindex) disabled
+        autoindex_on = re.search(r"autoindex\s+on\s*;", content, re.IGNORECASE)
+        if autoindex_on:
+            findings.append(ConfigFinding(
+                "V13.4.3", "fail", path, _line_of(content, autoindex_on),
+                "autoindex on found — directory listing is enabled", confidence=0.85,
+            ))
+        else:
+            # nginx's own default is autoindex off, so absence of the directive is
+            # a (lower-confidence) pass rather than a fail, unlike the header checks above.
+            autoindex_off = re.search(r"autoindex\s+off\s*;", content, re.IGNORECASE)
+            findings.append(ConfigFinding(
+                "V13.4.3", "pass", path, _line_of(content, autoindex_off) if autoindex_off else None,
+                "autoindex off directive found" if autoindex_off else
+                "No autoindex directive found — nginx defaults to autoindex off",
+                confidence=0.8 if autoindex_off else 0.4,
+            ))
+
+        # V13.4.4 — HTTP TRACE method not allowed
+        trace_deny = re.search(
+            r"if\s*\(\s*\$request_method\s*=\s*TRACE\s*\)\s*\{[^}]*(?:return\s+40[45]|deny\s+all)",
+            content, re.IGNORECASE | re.DOTALL,
+        )
+        limit_except_trace = re.search(r"limit_except\s+[^{]*\bTRACE\b", content, re.IGNORECASE)
+        if trace_deny:
+            findings.append(ConfigFinding(
+                "V13.4.4", "pass", path, _line_of(content, trace_deny),
+                "Explicit TRACE method block found", confidence=0.7,
+            ))
+        elif limit_except_trace:
+            findings.append(ConfigFinding(
+                "V13.4.4", "fail", path, _line_of(content, limit_except_trace),
+                "limit_except directive explicitly allows the TRACE method", confidence=0.6,
+            ))
+        # else: no explicit TRACE handling either way — nginx itself doesn't natively
+        # proxy TRACE, so absence isn't proof of a problem; leave not_tested (no finding).
+
+        # V14.3.2 — Cache-Control: no-store on sensitive locations
+        sensitive_locations = list(re.finditer(
+            r"location\s*[^{]*(?:/api|/account|/profile|/admin|/dashboard|/auth)[^{]*\{",
+            content, re.IGNORECASE,
+        ))
+        if sensitive_locations:
+            for m in sensitive_locations:
+                block_end = content.find("}", m.end())
+                block = content[m.end():block_end if block_end != -1 else m.end() + 400]
+                if re.search(r"Cache-Control[^;]*no-store", block, re.IGNORECASE):
+                    findings.append(ConfigFinding(
+                        "V14.3.2", "pass", path, _line_of(content, m),
+                        "Sensitive location found with Cache-Control: no-store configured",
+                        confidence=0.55,
+                    ))
+                else:
+                    findings.append(ConfigFinding(
+                        "V14.3.2", "fail", path, _line_of(content, m),
+                        "Sensitive location (api/account/profile/admin/dashboard/auth) found "
+                        "without Cache-Control: no-store", confidence=0.5,
+                    ))
+        # else: no location resembling a sensitive endpoint — not_tested (no finding emitted)
 
         return findings
