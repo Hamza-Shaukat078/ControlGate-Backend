@@ -485,6 +485,28 @@ class SliceClassifier:
         r')',
         re.IGNORECASE,
     )
+    # Browser/client same-origin calls with relative paths are not SSRF. SSRF requires
+    # a server-side HTTP client reaching an attacker-controlled absolute URL/host.
+    _RELATIVE_DIRECT_FETCH = re.compile(
+        r'\b(?:fetch|axios\.(?:get|post|put|delete|request))\s*\(\s*(?:[\'"`]/(?!/))',
+        re.IGNORECASE,
+    )
+    _RELATIVE_URL_VAR_FETCH = re.compile(
+        r'\b(?:const|let|var)\s+([a-zA-Z_]\w*)\s*=\s*'
+        r'(?:[^;\n]*\?\s*)?(?:[\'"`]/(?!/)[^\'"`]*[\'"`])'
+        r'(?:\s*:\s*(?:[\'"`]/(?!/)[^\'"`]*[\'"`]))?'
+        r'[^;\n]*;?[\s\S]{0,300}\b(?:fetch|axios\.(?:get|post|put|delete|request))\s*\(\s*\1\b',
+        re.IGNORECASE,
+    )
+    _ABSOLUTE_OR_PARSED_URL = re.compile(
+        r'https?://|new\s+URL\s*\(|urlparse\s*\(|req\.(?:query|body|params)|request\.(?:args|form|json|values)',
+        re.IGNORECASE,
+    )
+    _VISUAL_RANDOM_CONTEXT = re.compile(
+        r'\b(?:Sparkles|particles?|alpha|alphaSpeed|vx|vy|minSize|maxSize|'
+        r'animation|animate|canvas|color|opacity|jitter|confetti)\b',
+        re.IGNORECASE,
+    )
     # File operations that indicate genuine PATH_TRAVERSAL risk.
     _PATH_FILE_OPS      = re.compile(
         r'\bopen\s*\(|os\.(?:path\b|open\s*\(|makedirs|mkdir|remove|unlink|rename\s*\()'
@@ -672,6 +694,20 @@ class SliceClassifier:
                 return True
         if rule_id in ("SSRF", "UNVALIDATED_REDIRECT"):
             if self._ALLOWLIST_CHECK.search(code):
+                return True
+        if rule_id == "SSRF":
+            if (
+                self._RELATIVE_DIRECT_FETCH.search(code)
+                or self._RELATIVE_URL_VAR_FETCH.search(code)
+            ) and not self._ABSOLUTE_OR_PARSED_URL.search(code):
+                return True
+        if rule_id in ("INSECURE_RANDOM", "OTP_INSECURE_RANDOM"):
+            if self._VISUAL_RANDOM_CONTEXT.search(code) and not re.search(
+                r'\b(?:token|session|password|key|secret|nonce|csrf|api[_-]?key|'
+                r'filename|file_?name|upload|otp|verification|verifier|lookup|recovery|oob|code)\b',
+                code,
+                re.IGNORECASE,
+            ):
                 return True
         return False
 

@@ -102,3 +102,45 @@ class TestReDoSSafePatternExtractsActualRegex:
 
     def test_no_regex_construction_present_not_marked_safe(self):
         assert not _classifier()._code_is_safe("REGEX_DOS", self.NO_REGEX_CALL_AT_ALL)
+
+
+class TestSSRFRelativeBrowserFetchIsSafe:
+    PRODUCTS_SNIPPET = (
+        'const url = category ? `/api/products?category=${category}` : "/api/products";\n'
+        "fetch(url)\n"
+        "  .then((r) => r.json())"
+    )
+    ADMIN_SNIPPET = (
+        'const url = isEdit ? `/api/admin/products/${form.id}` : "/api/admin/products";\n'
+        'const res = await fetch(url, { method, headers: { "Content-Type": "application/json" } });'
+    )
+    ABSOLUTE_URL_SNIPPET = (
+        "const url = req.query.url;\n"
+        "await fetch(url);"
+    )
+
+    def test_relative_product_api_fetch_is_not_ssrf(self):
+        assert _classifier()._code_is_safe("SSRF", self.PRODUCTS_SNIPPET)
+
+    def test_relative_admin_api_fetch_is_not_ssrf(self):
+        assert _classifier()._code_is_safe("SSRF", self.ADMIN_SNIPPET)
+
+    def test_request_controlled_absolute_fetch_is_not_marked_safe(self):
+        assert not _classifier()._code_is_safe("SSRF", self.ABSOLUTE_URL_SNIPPET)
+
+
+class TestVisualRandomnessIsSafe:
+    VISUAL_SNIPPET = (
+        "alphaSpeed: (Math.random() * 0.6 + 0.2) * (Math.random() > 0.5 ? 1 : -1),\n"
+        "vx: (Math.random() - 0.5) * speed,\n"
+        "vy: (Math.random() - 0.5) * speed"
+    )
+    UPLOAD_FILENAME_SNIPPET = (
+        "const filename = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;"
+    )
+
+    def test_particle_animation_randomness_is_not_security_randomness(self):
+        assert _classifier()._code_is_safe("INSECURE_RANDOM", self.VISUAL_SNIPPET)
+
+    def test_upload_filename_randomness_still_requires_review(self):
+        assert not _classifier()._code_is_safe("INSECURE_RANDOM", self.UPLOAD_FILENAME_SNIPPET)

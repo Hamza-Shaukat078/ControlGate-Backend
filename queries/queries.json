@@ -515,7 +515,7 @@
       "urllib\\.request\\.urlopen\\s*\\([^)]*(?:request\\.|req\\.)",
       "httpx\\.(get|post)\\s*\\([^)]*(?:request\\.|req\\.)",
       "(?:request|get|got)\\s*\\(\\s*(?:tainted|url|target|custom)\\b",
-      "(?:request\\.get|JSDOM\\.fromURL|new\\s+WebSocket|new\\s+ws|axios\\.get|fetch)\\s*\\(\\s*(?:tainted|url|target|custom|myUrl)\\b",
+      "(?:request\\.get|JSDOM\\.fromURL|new\\s+WebSocket|new\\s+ws|axios\\.get)\\s*\\(\\s*(?:tainted|url|target|custom|myUrl)\\b",
       "Page\\.navigate\\s*\\(\\s*\\{\\s*url\\s*:\\s*(?:tainted|url|target)",
       "(?:SecretClient|KeyClient|download_blob_from_url)\\s*\\([^)]*(?:full_url|url|unsafe_host|unsafe_path)",
       "request\\.(?:args|form|json|get_json)(?:\\.get)?\\s*\\(['\"](?:url|URL|callback|target|redirect|hook|endpoint|src|href)['\"]\\)[\\s\\S]{0,400}(?:requests?\\.(get|post)|urlopen|httpx\\.(?:get|post)|axios\\.(?:get|post)|fetch)\\s*\\(",
@@ -1089,7 +1089,7 @@
     "name": "Insecure Random Number Generation",
     "owasp": "A02",
     "cwe": "CWE-330",
-    "description": "Use of predictable random number generator for security",
+    "description": "Use of predictable random number generator for security-sensitive values such as secrets, keys, nonces, CSRF tokens, or upload filenames",
     "severity": "medium",
     "languages": [
       "python",
@@ -1109,9 +1109,12 @@
       "session",
       "password",
       "key",
-      "otp",
-      "verification_code",
-      "verification code"
+      "secret",
+      "nonce",
+      "csrf",
+      "filename",
+      "file_name",
+      "upload"
     ],
     "sanitizers": [
       "secrets",
@@ -1119,11 +1122,58 @@
     ],
     "confidence": "medium",
     "regex_patterns": [
-      "(?<![a-zA-Z_])random\\.(random|randint|choice|randrange|uniform)\\s*\\(",
-      "Math\\.random\\s*\\("
+      "\\b(?:\\w*token\\w*|session|password|key|secret|nonce|csrf\\w*|api[_-]?key|filename|file_?name|upload)\\b[^\\n]{0,160}(?<![a-zA-Z_])random\\.(random|randint|choice|randrange|uniform)\\s*\\(",
+      "(?<![a-zA-Z_])random\\.(random|randint|choice|randrange|uniform)\\s*\\([^\\n]{0,160}\\b(?:\\w*token\\w*|session|password|key|secret|nonce|csrf\\w*|api[_-]?key|filename|file_?name|upload)\\b",
+      "\\b(?:\\w*token\\w*|session|password|key|secret|nonce|csrf\\w*|apiKey|api_key|filename|fileName|file_name|upload)\\b[^\\n]{0,160}Math\\.random\\s*\\(",
+      "Math\\.random\\s*\\([^\\n]{0,160}\\b(?:\\w*token\\w*|session|password|key|secret|nonce|csrf\\w*|apiKey|api_key|filename|fileName|file_name|upload)\\b"
     ],
     "asvs_controls": [
-      "V11.5.1",
+      "V11.5.1"
+    ]
+  },
+  "OTP_INSECURE_RANDOM": {
+    "rule_id": "OTP_INSECURE_RANDOM",
+    "name": "OTP or Lookup Secret Generated With Insecure Random",
+    "owasp": "A02",
+    "cwe": "CWE-330",
+    "description": "OTP, lookup secret, recovery code, or out-of-band verifier is generated using a predictable general-purpose random number generator instead of a CSPRNG.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [
+      "random.random",
+      "random.randint",
+      "random.choice",
+      "Math.random"
+    ],
+    "patterns": [],
+    "contexts": [
+      "otp",
+      "code",
+      "verification",
+      "verifier",
+      "lookup",
+      "recovery",
+      "oob"
+    ],
+    "sanitizers": [
+      "secrets",
+      "crypto.randomBytes",
+      "crypto.randomUUID",
+      "crypto.getRandomValues"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "\\b(?:otp|verification[_-]?code|verifier|lookup[_-]?secret|recovery[_-]?code|oob[_-]?code|code)\\b[^\\n]{0,160}(?<![a-zA-Z_])random\\.(random|randint|choice|randrange|uniform)\\s*\\(",
+      "(?<![a-zA-Z_])random\\.(random|randint|choice|randrange|uniform)\\s*\\([^\\n]{0,160}\\b(?:otp|verification[_-]?code|verifier|lookup[_-]?secret|recovery[_-]?code|oob[_-]?code|code)\\b",
+      "\\b(?:otp|verificationCode|verification_code|verifier|lookupSecret|lookup_secret|recoveryCode|recovery_code|oobCode|oob_code|code)\\b[^\\n]{0,160}Math\\.random\\s*\\(",
+      "Math\\.random\\s*\\([^\\n]{0,160}\\b(?:otp|verificationCode|verification_code|verifier|lookupSecret|lookup_secret|recoveryCode|recovery_code|oobCode|oob_code|code)\\b"
+    ],
+    "asvs_controls": [
       "V6.5.3"
     ]
   },
