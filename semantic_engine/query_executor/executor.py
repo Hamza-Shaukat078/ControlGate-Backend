@@ -170,6 +170,17 @@ class QueryExecutor:
         else:
             compiled_filters = []
 
+        # Whole-file sanitizer check. Inline negative lookaheads inside a regex
+        # pattern can only see text *after* the flagged call, but guard/setup code
+        # (trust-proxy config, middleware registration, etc.) is often declared
+        # once, earlier in the same file. Mirrors the confidence/severity downgrade
+        # already applied to DFG/TAINT path sanitizer hits (see _extract_slice)
+        # instead of outright suppressing the finding, so a stray comment
+        # mentioning the sanitizer string can't silently erase a real positive —
+        # it only softens it.
+        is_compliant = getattr(query, "finding_polarity", "vulnerable") == "compliant"
+        sanitizers = list(query.sanitizers or [])
+
         slices: List[CodeSlice] = []
         for file_path, code in files.items():
             if compiled_filters:
@@ -181,20 +192,37 @@ class QueryExecutor:
             # these rules conventionally sit a few lines below the flagged call.
             _WIDE_CONTEXT_RULES = {"BROKEN_ACCESS_CONTROL", "INPUT_VALIDATION_MISSING"}
             regex_context = 10 if query.rule_id in _WIDE_CONTEXT_RULES else 2
+
+            file_has_sanitizer = (
+                not is_compliant
+                and bool(sanitizers)
+                and self._file_contains_sanitizer(code, sanitizers)
+            )
+
             for pattern in patterns:
                 try:
                     for match in re.finditer(pattern, code):
                         line_num = code[:match.start()].count("\n") + 1
                         snippet = self._extract_code_snippet(code, {line_num}, context=regex_context)
                         slice_id = f"{query.rule_id}_REGEX_{file_path}_{line_num}"
+
+                        confidence = query.confidence
+                        severity = query.severity
+                        reason = f"Matched regex pattern: {pattern}"
+                        if file_has_sanitizer:
+                            confidence = "low"
+                            if severity.lower() in {"critical", "high"}:
+                                severity = "medium"
+                            reason += " Sanitizer observed elsewhere in file."
+
                         slices.append(CodeSlice(
                             slice_id=slice_id,
                             rule_id=query.rule_id,
                             rule_name=query.name,
                             owasp=query.owasp,
                             cwe=query.cwe,
-                            severity=query.severity,
-                            confidence=query.confidence,
+                            severity=severity,
+                            confidence=confidence,
                             source_node_id="regex_source",
                             sink_node_id="regex_sink",
                             path_nodes=[],
@@ -203,12 +231,17 @@ class QueryExecutor:
                             source_label="regex",
                             sink_label="regex",
                             pattern_type="REGEX",
-                            reason=f"Matched regex pattern: {pattern}"
+                            reason=reason
                         ))
                 except re.error:
                     continue
 
         return slices
+
+    def _file_contains_sanitizer(self, code: str, sanitizers: List[str]) -> bool:
+        """Whole-file, case-insensitive substring check for any sanitizer marker."""
+        code_lower = code.lower()
+        return any(s.lower() in code_lower for s in sanitizers if s)
 
     def _has_required_guards(self, graph: SemanticGraph, guards: List[str]) -> bool:
         """Return True if guard patterns are found in the graph."""

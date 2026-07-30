@@ -14,17 +14,35 @@ and evaluates them against the config_inspection-primary ASVS controls:
   V3.4.5  Referrer-Policy header (L2)
   V3.4.6  Content-Security-Policy frame-ancestors directive (L2)
   V4.1.1  Content-Type header includes a charset
+  V4.1.2  HTTP->HTTPS redirect scoped to user-facing endpoints, not API/service ones (L1)
+  V13.2.2 Least-privilege IAM for backend/service-account access (L1)
+  V13.3.2 Least-privilege IAM for the secrets vault itself (L1)
+  V16.4.2 Least-privilege IAM for log storage/access (L1)
   V5.2.1  Upload size limits configured
   V5.3.1  Uploaded files not executable as server-side code
+  V12.1.2 Only recommended/strong TLS cipher suites enabled (L2)
+  V13.2.5 Server-level allowlist restricting egress to external resources (L2)
   V13.4.3 Directory listing (autoindex) disabled (L2)
   V13.4.4 HTTP TRACE method not allowed (L2)
   V14.3.2 Cache-Control: no-store on sensitive (auth/account/api) locations (L2)
+  V17.1.1 TURN server restricts relay to non-internal IPs (L1)
+  V17.2.2 Only approved DTLS-SRTP cipher suites enabled (L1)
 
 nginx config is the primary source of truth for all of these (it's where these
 directives actually live in a real deployment); .env/YAML/Dockerfile provide
 supplementary, lower-confidence signal — mainly for V5.2.1 and V3.4.1, where
 app-level env vars or a security.yaml sometimes carry the same setting.
+
+The IAM controls (V13.2.2, V13.3.2, V16.4.2) read Terraform (.tf) and
+standalone AWS-style IAM policy JSON documents instead — the only place
+service-account/vault/log-access privilege actually gets defined as
+repo-visible config. Detection is deliberately narrow: only a bare `"*"`
+action or `"*"` resource on an Allow statement counts as a violation
+(service-scoped wildcards like `s3:*` are common, defensible practice and
+are not flagged) — this trades recall for precision rather than drowning
+real "god-mode" policies in noise.
 """
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -66,6 +84,12 @@ class ConfigInspector:
                     findings += self._inspect_dockerfile(path, content)
                 elif name.endswith((".yml", ".yaml")):
                     findings += self._inspect_yaml(path, content)
+                elif name.endswith(".tf"):
+                    findings += self._inspect_terraform(path, content)
+                elif name.endswith(".json") and self._looks_like_iam_policy(content):
+                    findings += self._inspect_iam_policy_json(path, content)
+                elif self._looks_like_coturn(name, content):
+                    findings += self._inspect_coturn(path, content)
                 elif self._looks_like_nginx(name, content):
                     findings += self._inspect_nginx(path, content)
             except Exception as exc:
@@ -79,6 +103,25 @@ class ConfigInspector:
         if name.endswith(".conf") or "nginx" in name:
             return True
         return bool(re.search(r"\bserver\s*\{", content) and re.search(r"\blocation\b", content))
+
+    @staticmethod
+    def _looks_like_coturn(name: str, content: str) -> bool:
+        # coturn's own config also commonly ends in .conf, so this must be
+        # checked (and win) before the nginx catch-all above.
+        if "turnserver" in name or "coturn" in name:
+            return True
+        return bool(
+            re.search(r"^\s*listening-port\s*=", content, re.MULTILINE | re.IGNORECASE)
+            and re.search(r"^\s*realm\s*=", content, re.MULTILINE | re.IGNORECASE)
+        )
+
+    @staticmethod
+    def _looks_like_iam_policy(content: str) -> bool:
+        try:
+            doc = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return False
+        return isinstance(doc, dict) and isinstance(doc.get("Statement"), list)
 
     # ── .env ──────────────────────────────────────────────────────────────────
 
@@ -144,6 +187,48 @@ class ConfigInspector:
                     f"Upload size limit found in YAML config: {size_limit}",
                     confidence=0.5,
                 ))
+
+            # V13.2.5 — Kubernetes NetworkPolicy restricting egress destinations.
+            # A policyTypes: [Egress] policy with concrete egress rules is a
+            # server-level allowlist for outbound traffic, same shape as
+            # OUTBOUND_REQUEST_ALLOWLIST_CHECK (V13.2.4) but enforced at the
+            # infra layer instead of in application code.
+            if doc.get("kind") == "NetworkPolicy":
+                spec = doc.get("spec") or {}
+                policy_types = spec.get("policyTypes") or []
+                egress_rules = spec.get("egress")
+                if isinstance(policy_types, list) and "Egress" in policy_types and \
+                        isinstance(egress_rules, list) and len(egress_rules) > 0:
+                    findings.append(ConfigFinding(
+                        "V13.2.5", "pass", path, None,
+                        "Kubernetes NetworkPolicy restricts egress with explicit rules "
+                        f"({len(egress_rules)} rule(s))",
+                        confidence=0.6,
+                    ))
+
+            # V13.2.2 — Kubernetes RBAC (Role/ClusterRole) least privilege. A rule
+            # granting verbs: ["*"] or resources: ["*"] is the RBAC equivalent of
+            # a bare "*" in an AWS IAM statement — same wildcard-only heuristic.
+            if doc.get("kind") in ("Role", "ClusterRole"):
+                rules = doc.get("rules") or []
+                if isinstance(rules, list) and rules:
+                    has_wildcard_rule = any(
+                        isinstance(rule, dict)
+                        and ("*" in (rule.get("verbs") or []) or "*" in (rule.get("resources") or []))
+                        for rule in rules
+                    )
+                    if has_wildcard_rule:
+                        findings.append(ConfigFinding(
+                            "V13.2.2", "fail", path, None,
+                            f"Kubernetes {doc['kind']} grants a wildcard verb or resource in an RBAC rule",
+                            confidence=0.55,
+                        ))
+                    else:
+                        findings.append(ConfigFinding(
+                            "V13.2.2", "pass", path, None,
+                            f"Kubernetes {doc['kind']} rules are scoped (no wildcard verb/resource)",
+                            confidence=0.4,
+                        ))
         return findings
 
     @staticmethod
@@ -171,6 +256,167 @@ class ConfigInspector:
             if m:
                 return int(m.group())
         return None
+
+    # ── IAM least-privilege (Terraform + standalone policy JSON) ─────────────
+
+    _SECRETS_RESOURCE_HINTS = (
+        "secretsmanager", "kms:", "kms.amazonaws", "vault", "ssm:", "parameter-store",
+    )
+    _LOG_RESOURCE_HINTS = ("logs:", "log-group", "cloudwatch", "arn:aws:logs")
+    _IAM_CONTROL_BY_CLASS = {"secrets": "V13.3.2", "logs": "V16.4.2", "general": "V13.2.2"}
+
+    @classmethod
+    def _classify_iam_resource(cls, text: str) -> str:
+        lowered = text.lower()
+        if any(h in lowered for h in cls._SECRETS_RESOURCE_HINTS):
+            return "secrets"
+        if any(h in lowered for h in cls._LOG_RESOURCE_HINTS):
+            return "logs"
+        return "general"
+
+    def _inspect_iam_policy_json(self, path: str, content: str) -> list[ConfigFinding]:
+        findings = []
+        try:
+            doc = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return findings
+        statements = doc.get("Statement")
+        if not isinstance(statements, list):
+            return findings
+
+        # Any "*" action/resource on an Allow statement wins for its control;
+        # otherwise a scoped statement is (low-confidence) evidence of least
+        # privilege. One finding per control per file — a fail from any
+        # statement for that resource class always wins over a pass.
+        verdict_by_control: dict[str, tuple[str, str]] = {}
+        for stmt in statements:
+            if not isinstance(stmt, dict) or stmt.get("Effect") != "Allow":
+                continue
+            actions = stmt.get("Action")
+            resources = stmt.get("Resource")
+            action_list = actions if isinstance(actions, list) else ([actions] if actions else [])
+            resource_list = resources if isinstance(resources, list) else ([resources] if resources else [])
+            control_id = self._IAM_CONTROL_BY_CLASS[
+                self._classify_iam_resource(" ".join(str(x) for x in resource_list + action_list))
+            ]
+            has_wildcard = "*" in action_list or "*" in resource_list
+
+            if has_wildcard:
+                verdict_by_control[control_id] = (
+                    "fail",
+                    f"IAM statement grants unrestricted (\"*\") access: Action={action_list}, Resource={resource_list}",
+                )
+            elif control_id not in verdict_by_control:
+                verdict_by_control[control_id] = (
+                    "pass",
+                    f"IAM statement scopes access: Action={action_list}, Resource={resource_list}",
+                )
+
+        for control_id, (verdict, note) in verdict_by_control.items():
+            findings.append(ConfigFinding(
+                control_id, verdict, path, None, note,
+                confidence=0.6 if verdict == "fail" else 0.4,
+            ))
+        return findings
+
+    _TF_WILDCARD_ACTION = re.compile(r'"?Action"?\s*[:=]\s*(?:"\*"|\[\s*"\*"\s*\])', re.IGNORECASE)
+    _TF_WILDCARD_RESOURCE = re.compile(r'"?Resource"?\s*[:=]\s*(?:"\*"|\[\s*"\*"\s*\])', re.IGNORECASE)
+    _TF_IAM_POLICY_RESOURCE = re.compile(
+        r'resource\s+"aws_iam_(?:policy|role_policy|user_policy|group_policy)"', re.IGNORECASE
+    )
+
+    def _inspect_terraform(self, path: str, content: str) -> list[ConfigFinding]:
+        # Terraform's HCL isn't JSON, but IAM policies embedded via jsonencode()
+        # or heredoc still carry "Action"/"Resource" tokens in the raw text, so
+        # the same wildcard check works as a plain-text scan.
+        findings = []
+        wildcard_matches = (
+            list(self._TF_WILDCARD_ACTION.finditer(content))
+            + list(self._TF_WILDCARD_RESOURCE.finditer(content))
+        )
+        if not wildcard_matches:
+            if self._TF_IAM_POLICY_RESOURCE.search(content):
+                findings.append(ConfigFinding(
+                    "V13.2.2", "pass", path, None,
+                    "Terraform IAM policy resource found with no bare wildcard Action/Resource",
+                    confidence=0.35,
+                ))
+            return findings
+
+        seen_controls = set()
+        for m in wildcard_matches:
+            window = content[max(0, m.start() - 300):m.end() + 300]
+            control_id = self._IAM_CONTROL_BY_CLASS[self._classify_iam_resource(window)]
+            if control_id in seen_controls:
+                continue
+            seen_controls.add(control_id)
+            findings.append(ConfigFinding(
+                control_id, "fail", path, _line_of(content, m),
+                "Terraform IAM policy grants unrestricted (\"*\") Action or Resource",
+                confidence=0.5,
+            ))
+        return findings
+
+    # ── coturn (TURN/STUN server) conf ────────────────────────────────────────
+
+    def _inspect_coturn(self, path: str, content: str) -> list[ConfigFinding]:
+        findings = []
+
+        # V17.1.1 — TURN relay restricted to non-internal IPs. coturn's default,
+        # absent any denied-peer-ip directive, is to relay to *any* address —
+        # including internal/private ranges — so absence is a real fail signal,
+        # not just missing evidence (same reasoning as the nginx autoindex check).
+        denied_peer_matches = list(re.finditer(
+            r"^\s*denied-peer-ip\s*=\s*(\S+)", content, re.MULTILINE | re.IGNORECASE
+        ))
+        no_loopback = re.search(r"^\s*no-loopback-peers\b", content, re.MULTILINE | re.IGNORECASE)
+        no_multicast = re.search(r"^\s*no-multicast-peers\b", content, re.MULTILINE | re.IGNORECASE)
+        if denied_peer_matches:
+            findings.append(ConfigFinding(
+                "V17.1.1", "pass", path, _line_of(content, denied_peer_matches[0]),
+                f"denied-peer-ip restricts relay to non-internal ranges "
+                f"({len(denied_peer_matches)} rule(s) found)",
+                confidence=0.6,
+            ))
+        elif no_loopback and no_multicast:
+            findings.append(ConfigFinding(
+                "V17.1.1", "pass", path, _line_of(content, no_loopback),
+                "no-loopback-peers and no-multicast-peers configured, partially restricting relay targets",
+                confidence=0.4,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V17.1.1", "fail", path, None,
+                "No denied-peer-ip (or no-loopback-peers/no-multicast-peers) directive found — "
+                "coturn's default is to relay to any address, including internal ranges",
+                confidence=0.5,
+            ))
+
+        # V17.2.2 — only approved DTLS-SRTP cipher suites. Only assessed when
+        # cipher-list is actually set; coturn's OpenSSL-default suite varies by
+        # build, so silence isn't itself evidence of a weak config.
+        cipher_match = re.search(r"^\s*cipher-list\s*=\s*[\"']?([^\"'\n]+)", content, re.MULTILINE | re.IGNORECASE)
+        if cipher_match:
+            cipher_list = cipher_match.group(1)
+            weak_token = re.search(
+                r"(?<!!)\b(?:RC4|3DES|DES|MD5|NULL|EXPORT|ADH|aNULL|eNULL)\b",
+                cipher_list, re.IGNORECASE,
+            )
+            if weak_token:
+                findings.append(ConfigFinding(
+                    "V17.2.2", "fail", path, _line_of(content, cipher_match),
+                    f"cipher-list allows a weak cipher token ({weak_token.group(0)}): {cipher_list.strip()}",
+                    confidence=0.7,
+                ))
+            else:
+                findings.append(ConfigFinding(
+                    "V17.2.2", "pass", path, _line_of(content, cipher_match),
+                    f"cipher-list restricted to a suite with no weak tokens: {cipher_list.strip()}",
+                    confidence=0.6,
+                ))
+        # else: no cipher-list directive — not_tested (no finding)
+
+        return findings
 
     # ── nginx / reverse-proxy conf ───────────────────────────────────────────
 
@@ -210,6 +456,36 @@ class ConfigInspector:
                 "V4.1.1", "fail", path, None,
                 "No explicit charset directive found in nginx config", confidence=0.4,
             ))
+
+        # V4.1.2 — HTTP->HTTPS redirect scoped to user-facing endpoints, not API/service
+        # ones. Only assessed when an API/service-shaped location block is present;
+        # whether *some* location redirects HTTP->HTTPS elsewhere in the file isn't
+        # itself evidence either way for this control.
+        api_location_matches = list(re.finditer(
+            r"location\s*[^{]*(?:/api|/graphql|/rpc)[^{]*\{([^}]*)\}",
+            content, re.IGNORECASE | re.DOTALL,
+        ))
+        if api_location_matches:
+            redirecting_api_location = next(
+                (m for m in api_location_matches
+                 if re.search(r"return\s+301\s+https|rewrite\s+\^[^\n]*https", m.group(1), re.IGNORECASE)),
+                None,
+            )
+            if redirecting_api_location:
+                findings.append(ConfigFinding(
+                    "V4.1.2", "fail", path, _line_of(content, redirecting_api_location),
+                    "API/service location block redirects HTTP to HTTPS instead of rejecting "
+                    "plaintext requests outright",
+                    confidence=0.5,
+                ))
+            else:
+                findings.append(ConfigFinding(
+                    "V4.1.2", "pass", path, _line_of(content, api_location_matches[0]),
+                    "API/service location block found with no HTTP->HTTPS redirect inside it "
+                    "(scoped correctly, assuming plaintext is rejected rather than redirected)",
+                    confidence=0.4,
+                ))
+        # else: no API/service-shaped location block found — not_tested (no finding)
 
         # V5.2.1 — client_max_body_size
         size_match = re.search(r"client_max_body_size\s+(\S+);", content, re.IGNORECASE)
@@ -373,6 +649,57 @@ class ConfigInspector:
             ))
         # else: no explicit TRACE handling either way — nginx itself doesn't natively
         # proxy TRACE, so absence isn't proof of a problem; leave not_tested (no finding).
+
+        # V12.1.2 — only recommended/strong TLS cipher suites enabled.
+        # Only assessed when the directive is present; nginx build defaults vary
+        # by version/distro, so silence isn't itself evidence of a weak config.
+        ciphers_match = re.search(r"ssl_ciphers\s+[\"']?([^;\"']+)[\"']?\s*;", content, re.IGNORECASE)
+        if ciphers_match:
+            cipher_list = ciphers_match.group(1)
+            weak_token = re.search(
+                r"(?<!!)\b(?:RC4|3DES|DES|MD5|NULL|EXPORT|ADH|aNULL|eNULL)\b",
+                cipher_list, re.IGNORECASE,
+            )
+            if weak_token:
+                findings.append(ConfigFinding(
+                    "V12.1.2", "fail", path, _line_of(content, ciphers_match),
+                    f"ssl_ciphers allows a weak cipher token ({weak_token.group(0)}): {cipher_list.strip()}",
+                    confidence=0.8,
+                ))
+            else:
+                findings.append(ConfigFinding(
+                    "V12.1.2", "pass", path, _line_of(content, ciphers_match),
+                    f"ssl_ciphers restricted to a suite with no weak tokens: {cipher_list.strip()}",
+                    confidence=0.7,
+                ))
+
+        # V13.2.5 — server-level allowlist restricting egress to external resources.
+        # Heuristic: a location acting as an outbound/forward-proxy gateway
+        # (dynamic resolver + variable proxy_pass target) should carry an
+        # allow/deny ACL restricting which destinations it will relay to.
+        resolver_present = re.search(r"^\s*resolver\s+\S+", content, re.IGNORECASE | re.MULTILINE)
+        egress_gateway_matches = list(re.finditer(
+            r"location\s*[^{]*\{[^}]*proxy_pass\s+\$[^;]+;[^}]*\}",
+            content, re.IGNORECASE | re.DOTALL,
+        ))
+        if resolver_present and egress_gateway_matches:
+            m = egress_gateway_matches[0]
+            block = m.group(0)
+            has_acl = re.search(r"^\s*(?:allow|deny)\s+\S+\s*;", block, re.IGNORECASE | re.MULTILINE)
+            if has_acl:
+                findings.append(ConfigFinding(
+                    "V13.2.5", "pass", path, _line_of(content, m),
+                    "Outbound proxy location restricts destinations with an allow/deny ACL",
+                    confidence=0.5,
+                ))
+            else:
+                findings.append(ConfigFinding(
+                    "V13.2.5", "fail", path, _line_of(content, m),
+                    "Outbound proxy location (dynamic resolver + variable proxy_pass) found "
+                    "without an allow/deny ACL restricting egress destinations",
+                    confidence=0.5,
+                ))
+        # else: no forward-proxy/egress-gateway shape detected — not_tested (no finding)
 
         # V14.3.2 — Cache-Control: no-store on sensitive locations
         sensitive_locations = list(re.finditer(

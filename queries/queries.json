@@ -1458,7 +1458,7 @@
     "name": "Insecure Cookie Configuration",
     "owasp": "A05",
     "cwe": "CWE-614",
-    "description": "Cookie set without secure flag",
+    "description": "Cookie set without the secure flag, or without the HttpOnly flag — either omission leaves the cookie exposed (to network interception or client-side script access)",
     "severity": "medium",
     "languages": [
       "python",
@@ -1470,7 +1470,9 @@
     "patterns": [],
     "regex_patterns": [
       "set_cookie\\((?![^)]*secure\\s*=\\s*True)[^)]+\\)",
+      "set_cookie\\((?![^)]*httponly\\s*=\\s*True)[^)]+\\)",
       "res\\.cookie\\((?![^)]*(?:secure\\s*:\\s*true|secure\\s*=\\s*True))[^)]+\\)",
+      "res\\.cookie\\((?![^)]*httpOnly\\s*:\\s*true)[^)]+\\)",
       "Set-Cookie[\\\"']?\\s*:\\s*[\\\"'][^\\\"']*(?!.*Secure)[^\\\"']*[\\\"']"
     ],
     "sanitizers": [
@@ -2143,10 +2145,12 @@
     "name": "Exceptions Suppressed Without Logging",
     "owasp": "A09",
     "cwe": "CWE-391",
-    "description": "Exceptions ignored without logging",
+    "description": "Exceptions or errors are caught and silently swallowed (except: pass, empty catch block) instead of being logged",
     "severity": "medium",
     "languages": [
-      "python"
+      "python",
+      "javascript",
+      "typescript"
     ],
     "sources": [],
     "sinks": [],
@@ -2154,12 +2158,17 @@
     "regex_patterns": [
       "(?im)^\\s*except\\s+.*:\\s*\\n\\s*pass\\s*$",
       "except\\s*:\\s*\\n\\s*pass",
-      "except\\s+\\w+\\s*:\\s*\\n\\s*pass"
+      "except\\s+\\w+\\s*:\\s*\\n\\s*pass",
+      "catch\\s*\\(\\s*\\w*\\s*\\)\\s*\\{\\s*\\}",
+      "catch\\s*\\(\\s*\\w*\\s*\\)\\s*\\{\\s*(?://[^\\n]*\\s*)+\\}"
     ],
     "file_patterns": [
-      "(?i)\\.py$"
+      "(?i)\\.(?:py|js|jsx|ts|tsx)$"
     ],
-    "confidence": "low"
+    "confidence": "low",
+    "asvs_controls": [
+      "V16.3.4"
+    ]
   },
   "HTTP_ERROR_HANDLER_SILENT": {
     "rule_id": "HTTP_ERROR_HANDLER_SILENT",
@@ -3228,7 +3237,8 @@
       "jwt\\.verify\\s*\\((?![^)]*audience\\s*:)[^)]*\\)"
     ],
     "asvs_controls": [
-      "V9.2.3"
+      "V9.2.3",
+      "V10.3.1"
     ]
   },
   "WEAK_PASSWORD_HASHING": {
@@ -3427,7 +3437,12 @@
     "sources": [],
     "sinks": [],
     "patterns": [],
-    "sanitizers": [],
+    "sanitizers": [
+      "trust proxy",
+      "ProxyFix",
+      "trusted_proxies",
+      "TRUSTED_PROXIES"
+    ],
     "confidence": "medium",
     "regex_patterns": [
       "request\\.headers\\.get\\s*\\(\\s*['\\\"](?:X-Forwarded-For|X-Real-IP|X-Client-IP|X-Forwarded-Host|CF-Connecting-IP|True-Client-IP|Forwarded)['\\\"]",
@@ -3435,10 +3450,12 @@
       "req\\.headers\\s*\\[\\s*['\\\"](?:x-forwarded-for|x-real-ip|x-client-ip|cf-connecting-ip|true-client-ip)['\\\"]",
       "req\\.(?:header|get)\\s*\\(\\s*['\\\"](?:X-Forwarded-For|X-Real-IP|X-Client-IP|CF-Connecting-IP|True-Client-IP)['\\\"]",
       "HTTP_X_FORWARDED_FOR\\b",
-      "['\\\"]X-Forwarded-For['\\\"]\\s*(?:\\]|,|\\))[^;\\n]{0,200}(?:allow|block|restrict|ban|whitelist|blacklist|rate|limit|check|if|==|!=|in\\s)"
+      "['\\\"]X-Forwarded-For['\\\"]\\s*(?:\\]|,|\\))[^;\\n]{0,200}(?:allow|block|restrict|ban|whitelist|blacklist|rate|limit|check|if|==|!=|in\\s)",
+      "(?![\\s\\S]{0,300}(?:trust proxy|ProxyFix|trusted_proxies|TRUSTED_PROXIES))req\\.ip\\b[^;\\n]{0,200}(?:allow|block|restrict|ban|whitelist|blacklist|rate|limit|==|!=)"
     ],
     "asvs_controls": [
-      "V4.1.3"
+      "V4.1.3",
+      "V15.3.4"
     ]
   },
   "HTTP_REQUEST_SMUGGLING": {
@@ -3736,7 +3753,7 @@
     "name": "Cryptographic Key Size Below 128-bit Security Level",
     "owasp": "A02",
     "cwe": "CWE-326",
-    "description": "Key size provides less than 128 bits of security (e.g. RSA < 3072, DH < 3072); ASVS 5.0 V11.2.3 requires a 128-bit security minimum, stricter than older 1024/2048 guidance",
+    "description": "Key generation does not meet the approved algorithm/key-size baseline: RSA/DH below 3072 bits (less than a 128-bit security level per ASVS 5.0 V11.2.3), a weak/undersized EC curve (< 256-bit, e.g. secp192r1/secp160r1), or use of DSA, which is legacy and disallowed for new key generation",
     "severity": "medium",
     "languages": [
       "python",
@@ -3752,10 +3769,17 @@
       "key_size\\s*=\\s*(?:512|1024|2048)\\b",
       "generate_private_key\\([^,)]*(?:512|1024|2048)",
       "dh\\.generate_parameters\\([^)]*(?:512|1024|2048)",
-      "modulusLength\\s*:\\s*(?:512|1024|2048)\\b"
+      "modulusLength\\s*:\\s*(?:512|1024|2048)\\b",
+      "ec\\.(?:SECP112R1|SECP112R2|SECP128R1|SECP128R2|SECP160R1|SECP160R2|SECP160K1|SECP192R1|SECP192K1|SECP224R1|SECP224K1)\\s*\\(\\s*\\)",
+      "namedCurve\\s*:\\s*['\"](?:secp112r1|secp128r1|secp128r2|secp160r1|secp160r2|secp160k1|secp192r1|secp192k1|prime192v1|secp224r1|secp224k1)['\"]",
+      "ecparam\\b[^\\n]*-name\\s+(?:secp112r1|secp128r1|secp160r1|secp160k1|secp192r1|secp192k1|prime192v1|secp224r1|secp224k1)",
+      "dsa\\.generate_private_key\\s*\\(",
+      "DSA\\.generate\\s*\\(",
+      "generateKeyPairSync\\s*\\(\\s*['\"]dsa['\"]"
     ],
     "asvs_controls": [
-      "V11.2.3"
+      "V11.2.3",
+      "V11.6.1"
     ]
   },
   "XPATH_INJECTION": {
@@ -4710,6 +4734,987 @@
     ],
     "asvs_controls": [
       "V15.3.5"
+    ]
+  },
+  "OAUTH_CALLBACK_STATE_NOT_VALIDATED": {
+    "rule_id": "OAUTH_CALLBACK_STATE_NOT_VALIDATED",
+    "name": "OAuth Callback Missing Session-Bound State Validation",
+    "owasp": "A07",
+    "cwe": "CWE-352",
+    "description": "An OAuth callback handler reads state/code from the query string and exchanges the authorization code for a token without comparing state against a value stored earlier in that user's own session, allowing CSRF/login-CSRF via a crafted callback URL.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "req.session.oauthState",
+      "session.oauth_state",
+      "session['state']",
+      "compare_digest"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.route\\s*\\(\\s*[\"'][^\"']*(?:callback|oauth[-_]?callback|redirect[-_]?uri)[^\"']*[\"'][^\\n]*\\)(?![\\s\\S]{0,400}(?:session\\[[\"']state|session\\.get\\([\"']state|req\\.session\\.oauthState|session\\.oauth_state|compare_digest))[\\s\\S]{0,400}(?:exchange_code|fetch_token|get_token|authorize_access_token)",
+      "(?:router|app)\\.get\\s*\\(\\s*[\"'][^\"']*(?:callback|oauth[-_]?callback)[^\"']*[\"']\\s*,(?![\\s\\S]{0,400}(?:req\\.session\\.oauthState|session\\.oauthState|req\\.session\\.state))[\\s\\S]{0,400}(?:exchangeCodeForToken|getToken|exchange_code|fetchToken)"
+    ],
+    "asvs_controls": [
+      "V10.1.2"
+    ]
+  },
+  "OIDC_ISSUER_NOT_VALIDATED": {
+    "rule_id": "OIDC_ISSUER_NOT_VALIDATED",
+    "name": "OIDC Token Handling Missing Issuer Validation",
+    "owasp": "A07",
+    "cwe": "CWE-346",
+    "description": "An OAuth/OIDC token or callback handler decodes/verifies a token without validating the iss (issuer) claim against the expected authorization server, leaving the client open to mix-up attacks across multiple trusted issuers.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "check_issuer",
+      "validate_issuer",
+      "iss ==",
+      "expected_issuer"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?![\\s\\S]{0,500}(?:check_issuer|validate_issuer|claims\\[[\"']iss[\"']\\]\\s*(?:==|===)|payload\\[[\"']iss[\"']\\]\\s*(?:==|===)|\\.iss\\s*(?:==|===)))(?:claims|payload)\\s*=\\s*jwt\\.decode\\s*\\(\\s*(?:id_token|idToken)",
+      "(?![\\s\\S]{0,500}(?:check_issuer|validate_issuer|\\.iss\\s*(?:==|===)))jwt\\.verify\\s*\\(\\s*(?:id_token|idToken)",
+      "(?![\\s\\S]{0,500}(?:check_issuer|validate_issuer|\\.iss\\s*(?:==|===)))verifyIdToken\\s*\\(\\s*(?:idToken|id_token)"
+    ],
+    "asvs_controls": [
+      "V10.2.2"
+    ]
+  },
+  "OIDC_USER_LOOKUP_MISSING_ISSUER": {
+    "rule_id": "OIDC_USER_LOOKUP_MISSING_ISSUER",
+    "name": "User Lookup Keyed on sub Without Issuer",
+    "owasp": "A07",
+    "cwe": "CWE-639",
+    "description": "A user record is looked up or created using only the token's sub claim, without also matching iss (issuer). Since sub is only unique per-issuer, a malicious or federated identity provider can mint a colliding sub and impersonate an existing account.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "iss",
+      "issuer"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:User\\.objects\\.(?:get|filter|get_or_create)|User\\.query\\.filter_by)\\s*\\(\\s*sub\\s*=\\s*claims(?:\\.get\\([\"']sub[\"']\\)|\\[[\"']sub[\"']\\])(?![^)]*iss)[^)]*\\)",
+      "find_one\\s*\\(\\s*\\{\\s*[\"']sub[\"']\\s*:\\s*claims(?:\\.get\\([\"']sub[\"']\\)|\\[[\"']sub[\"']\\])(?![^}]*iss)[^}]*\\}\\s*\\)",
+      "findOne\\s*\\(\\s*\\{\\s*sub\\s*:\\s*(?:claims|payload|token)\\.sub\\s*\\}\\s*\\)",
+      "(?:findOrCreate|create)\\s*\\(\\s*\\{\\s*sub\\s*:\\s*(?:claims|payload)\\.sub\\s*\\}\\s*\\)"
+    ],
+    "asvs_controls": [
+      "V10.3.3"
+    ]
+  },
+  "STEPUP_CLAIMS_NOT_VALIDATED": {
+    "rule_id": "STEPUP_CLAIMS_NOT_VALIDATED",
+    "name": "Sensitive Action Missing Step-Up Auth Claim Check",
+    "owasp": "A07",
+    "cwe": "CWE-287",
+    "description": "A route performing a sensitive, high-risk action (funds transfer, withdrawal, account deletion) never inspects the acr, amr, or auth_time claims from the token to confirm the required authentication strength/recency for step-up authorization.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "acr",
+      "amr",
+      "auth_time"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.route\\s*\\(\\s*[\"'][^\"']*(?:transfer|withdraw|delete[-_]?account|payout|wire[-_]?transfer)[^\"']*[\"'][^\\n]*\\)(?![\\s\\S]{0,300}(?:\\bacr\\b|\\bamr\\b|auth_time))[\\s\\S]{0,300}def\\s+\\w+\\(",
+      "(?:router|app)\\.(?:post|put|delete)\\s*\\(\\s*[\"'][^\"']*(?:transfer|withdraw|delete-account|payout)[^\"']*[\"']\\s*,(?![\\s\\S]{0,300}(?:\\bacr\\b|\\bamr\\b|auth_time))"
+    ],
+    "asvs_controls": [
+      "V10.3.4",
+      "V6.8.4"
+    ]
+  },
+  "OAUTH_AUTHZ_MISSING_PKCE": {
+    "rule_id": "OAUTH_AUTHZ_MISSING_PKCE",
+    "name": "OAuth Authorization URL Missing PKCE Parameters",
+    "owasp": "A07",
+    "cwe": "CWE-352",
+    "description": "An authorization-URL builder targeting the /authorize endpoint omits code_challenge/code_challenge_method, so the authorization code grant is not protected by PKCE.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "code_challenge",
+      "code_challenge_method",
+      "codeChallenge"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "/authorize\\?(?![^\\n\"'`]*code_challenge)[^\\n\"'`]*response_type",
+      "`[^`]*/authorize\\?(?:(?!code_challenge)[^`])*`",
+      "authorization_url\\s*=\\s*(?![^\\n]*code_challenge)[^\\n]*(?:/authorize\\b|authorize\\?)"
+    ],
+    "asvs_controls": [
+      "V10.4.6"
+    ]
+  },
+  "REFRESH_TOKEN_NO_EXPIRY": {
+    "rule_id": "REFRESH_TOKEN_NO_EXPIRY",
+    "name": "Refresh Token Issued Without Absolute Expiration",
+    "owasp": "A07",
+    "cwe": "CWE-613",
+    "description": "Refresh-token issuance (creation call or datastore insert) sets no expiry field, so the refresh token has no absolute lifetime and remains valid indefinitely.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "expires_at",
+      "expiresAt",
+      "expires_in",
+      "exp="
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "create_refresh_token\\s*\\((?![^)]*expir)[^)]*\\)",
+      "refresh_tokens?\\.(?:insert(?:One)?|create)\\s*\\((?![\\s\\S]{0,200}expir)[\\s\\S]{0,200}\\)",
+      "RefreshToken\\s*\\(\\s*(?:token|user)[^)]*\\)(?![\\s\\S]{0,150}expir)",
+      "INSERT\\s+INTO\\s+refresh_tokens\\s*\\((?![^)]*expir)[^)]*\\)"
+    ],
+    "asvs_controls": [
+      "V10.4.8"
+    ]
+  },
+  "OIDC_CLIENT_KEYS_BY_EMAIL_NOT_SUB": {
+    "rule_id": "OIDC_CLIENT_KEYS_BY_EMAIL_NOT_SUB",
+    "name": "Client Keys Local Account on Email/Name Instead of sub",
+    "owasp": "A07",
+    "cwe": "CWE-639",
+    "description": "OIDC client code links or creates the local account using email or name from the ID token payload instead of the stable sub identifier, which can change or be reused/reassigned by the identity provider.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "sub",
+      ".sub"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:User\\.objects\\.(?:get_or_create|get|filter)|User\\.query\\.filter_by)\\s*\\(\\s*email\\s*=\\s*(?:claims|payload|id_token_claims|userinfo)(?:\\.get\\([\"']email[\"']\\)|\\[[\"']email[\"']\\]|\\.email)",
+      "findOne\\s*\\(\\s*\\{\\s*email\\s*:\\s*(?:claims|payload|idTokenClaims|profile)\\.email\\s*\\}",
+      "(?:findOrCreate|create)\\s*\\(\\s*\\{\\s*email\\s*:\\s*(?:claims|payload|profile)\\.email\\s*\\}"
+    ],
+    "asvs_controls": [
+      "V10.5.2"
+    ]
+  },
+  "OIDC_DISCOVERY_HTTP_OR_UNVALIDATED": {
+    "rule_id": "OIDC_DISCOVERY_HTTP_OR_UNVALIDATED",
+    "name": "OIDC Discovery Document Fetched Insecurely",
+    "owasp": "A07",
+    "cwe": "CWE-345",
+    "description": "The OIDC discovery document (.well-known/openid-configuration) is fetched over plain HTTP, or its issuer is never validated against the expected value, allowing a spoofed authorization-server metadata document to redirect the client to attacker-controlled endpoints.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "https://",
+      "verify_issuer",
+      "validate_issuer"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "[\"']http://[^\"']*/\\.well-known/openid-configuration[\"']",
+      "(?:requests\\.get|axios\\.get|fetch)\\s*\\([^)]*\\.well-known/openid-configuration[^)]*\\)(?![\\s\\S]{0,300}(?:issuer[\\s\\S]{0,5}(?:==|===)|verify_issuer|validate_issuer))"
+    ],
+    "asvs_controls": [
+      "V10.5.3"
+    ]
+  },
+  "ID_TOKEN_AUDIENCE_NOT_CHECKED": {
+    "rule_id": "ID_TOKEN_AUDIENCE_NOT_CHECKED",
+    "name": "ID Token Verified Without Audience Check",
+    "owasp": "A07",
+    "cwe": "CWE-345",
+    "description": "ID token verification decodes/verifies the token without checking that the aud claim equals this client's client_id, allowing an ID token issued for a different client at the same provider to be accepted.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "audience=",
+      "audience:",
+      "CLIENT_ID"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?![\\s\\S]{0,400}(?:audience\\s*=|audience\\s*:|\\.aud\\s*(?:==|===)|CLIENT_ID))(?:claims|payload)\\s*=\\s*jwt\\.decode\\s*\\(\\s*(?:id_token|idToken)",
+      "jwt\\.verify\\s*\\(\\s*(?:id_token|idToken)(?![\\s\\S]{0,200}(?:audience|CLIENT_ID))",
+      "verifyIdToken\\s*\\(\\s*(?:idToken|id_token)(?![\\s\\S]{0,200}(?:audience|clientId|CLIENT_ID))"
+    ],
+    "asvs_controls": [
+      "V10.5.4"
+    ]
+  },
+  "LOGOUT_TOKEN_NOT_VALIDATED": {
+    "rule_id": "LOGOUT_TOKEN_NOT_VALIDATED",
+    "name": "Back-Channel Logout Token Not Validated",
+    "owasp": "A07",
+    "cwe": "CWE-613",
+    "description": "A back-channel-logout endpoint decodes a logout_token without checking the events, sid, sub, or typ claims required by OIDC Back-Channel Logout, allowing a forged or replayed logout token to terminate an arbitrary session.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "events",
+      "sid",
+      "typ"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.route\\s*\\(\\s*[\"'][^\"']*(?:backchannel[-_]?logout|back[-_]?channel[-_]?logout)[^\"']*[\"'][^\\n]*\\)(?![\\s\\S]{0,300}(?:events|\\bsid\\b|\\btyp\\b))[\\s\\S]{0,300}def\\s+\\w+\\(",
+      "jwt\\.decode\\s*\\(\\s*logout_token(?![\\s\\S]{0,300}(?:events|\\bsid\\b|\\btyp\\b))",
+      "(?:router|app)\\.post\\s*\\(\\s*[\"'][^\"']*(?:backchannel-logout|back-channel-logout)[^\"']*[\"']\\s*,(?![\\s\\S]{0,300}(?:events|\\bsid\\b|\\btyp\\b))"
+    ],
+    "asvs_controls": [
+      "V10.5.5"
+    ]
+  },
+  "OIDC_OP_ALLOWS_FRAGMENT_RESPONSE": {
+    "rule_id": "OIDC_OP_ALLOWS_FRAGMENT_RESPONSE",
+    "name": "Authorization Server Allows Implicit/Fragment Response Type",
+    "owasp": "A07",
+    "cwe": "CWE-522",
+    "description": "The authorization-server implementation allows response_type=token or id_token (or response_mode=fragment), returning tokens via the URL fragment instead of requiring the code or form_post response mode.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "form_post",
+      "response_mode: 'query'",
+      "code"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "ALLOWED_RESPONSE_TYPES\\s*=\\s*\\[[^\\]]*(?:[\"']token[\"']|[\"']id_token token[\"'])",
+      "response_type\\s*(?:==|===|in)\\s*\\[[^\\]]*(?:[\"']token[\"']|[\"']id_token[\"'])",
+      "response_mode\\s*[:=]\\s*[\"']fragment[\"']"
+    ],
+    "asvs_controls": [
+      "V10.6.1"
+    ]
+  },
+  "WEAK_TLS_CIPHER_SUITE": {
+    "rule_id": "WEAK_TLS_CIPHER_SUITE",
+    "name": "Weak TLS Cipher Suite Configured",
+    "owasp": "A02",
+    "cwe": "CWE-327",
+    "description": "Application-level TLS server/context configuration (Python ssl.SSLContext.set_ciphers, Node tls.createServer) explicitly enables a weak cipher suite (RC4/3DES/DES/MD5/NULL/EXPORT/anonymous Diffie-Hellman).",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "HIGH:!aNULL:!MD5",
+      "TLSv1_2"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "set_ciphers\\s*\\(\\s*[\"'][^\"']*(?<!!)\\b(?:RC4|3DES|DES|MD5|NULL|EXPORT|ADH|aNULL|eNULL)\\b[^\"']*[\"']",
+      "ciphers\\s*:\\s*[\"'][^\"']*(?<!!)\\b(?:RC4|3DES|DES|MD5|NULL|EXPORT|ADH|aNULL|eNULL)\\b[^\"']*[\"']"
+    ],
+    "asvs_controls": [
+      "V12.1.2"
+    ]
+  },
+  "INTERNAL_SERVICE_PLAINTEXT_HTTP": {
+    "rule_id": "INTERNAL_SERVICE_PLAINTEXT_HTTP",
+    "name": "Internal Service-to-Service Call Over Plaintext HTTP",
+    "owasp": "A02",
+    "cwe": "CWE-319",
+    "description": "An outbound service-to-service call targets an internal-looking host (private IP range, .internal/.local/.svc suffix, or a bare service-mesh hostname) over plain http:// instead of TLS-protected https://.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "https://"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:requests|httpx)\\.(?:get|post|put|delete|patch|request)\\s*\\(\\s*f?[\"']http://(?:10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|172\\.(?:1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3}|[a-zA-Z0-9-]+\\.(?:internal|local|svc\\.cluster\\.local|svc)\\b|[a-zA-Z][a-zA-Z0-9-]*:[0-9]{2,5})",
+      "(?:axios\\.(?:get|post|put|delete|patch)|fetch)\\s*\\(\\s*[`\"']http://(?:10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|172\\.(?:1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3}|[a-zA-Z0-9-]+\\.(?:internal|local|svc\\.cluster\\.local|svc)\\b|[a-zA-Z][a-zA-Z0-9-]*:[0-9]{2,5})"
+    ],
+    "asvs_controls": [
+      "V12.3.3"
+    ]
+  },
+  "SERVICE_AUTH_SHORT_LIVED_CREDENTIALS_MARKER": {
+    "rule_id": "SERVICE_AUTH_SHORT_LIVED_CREDENTIALS_MARKER",
+    "name": "Service Authentication Uses Short-Lived Credentials",
+    "owasp": "A07",
+    "cwe": "CWE-798",
+    "description": "Informational marker for service-to-service authentication using short-term, dynamically issued credentials (OAuth client-credentials grant, cloud STS AssumeRole, or Vault dynamic secrets) rather than a static long-lived password or API key.",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "grant_type[\"']?\\s*[:=]\\s*[\"']client_credentials[\"']",
+      "hvac\\.Client\\s*\\(",
+      "vault\\.read\\s*\\(\\s*[\"'](?:database|aws|gcp|azure)/creds/",
+      "sts\\.assume_role\\s*\\(",
+      "AssumeRoleWithWebIdentity",
+      "(?:new\\s+AWS\\.STS|\\.assumeRole)\\s*\\("
+    ],
+    "asvs_controls": [
+      "V13.2.1"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "CACHED_SENSITIVE_DATA_SERVER_SIDE": {
+    "rule_id": "CACHED_SENSITIVE_DATA_SERVER_SIDE",
+    "name": "Sensitive Data Cached Server-Side Without Short TTL",
+    "owasp": "A02",
+    "cwe": "CWE-524",
+    "description": "A server-side cache-set call stores a sensitive-looking key or value (password, token, SSN, card number) with no TTL/expiration parameter, leaving the sensitive data resident in the cache indefinitely.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "ex=",
+      "px=",
+      "timeout=",
+      "expire"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "redis\\w*\\.set\\s*\\(\\s*f?[\"'][^\"']*(?:password|token|secret|ssn|card[-_]?number|cvv|api[-_]?key)[^\"']*[\"'](?![^)]*(?:ex\\s*=|px\\s*=|exat\\s*=|expire))[^)]*\\)",
+      "memcache\\w*\\.set\\s*\\(\\s*f?[\"'][^\"']*(?:password|token|secret|ssn|card[-_]?number|cvv|api[-_]?key)[^\"']*[\"'](?![^)]*(?:time\\s*=|expire))[^)]*\\)",
+      "@cache\\.cached\\s*\\((?![^)]*timeout\\s*=)[^)]*\\)[\\s\\S]{0,150}def\\s+\\w*(?:profile|account|password|token|card|ssn)\\w*\\("
+    ],
+    "asvs_controls": [
+      "V14.2.2"
+    ]
+  },
+  "SENSITIVE_DATA_TO_THIRD_PARTY_TRACKER": {
+    "rule_id": "SENSITIVE_DATA_TO_THIRD_PARTY_TRACKER",
+    "name": "Sensitive Data Sent to Third-Party Tracker",
+    "owasp": "A02",
+    "cwe": "CWE-359",
+    "description": "An analytics, tracking, or error-reporting call (analytics.track, gtag, mixpanel.track, Sentry) includes a sensitive field (password, token, SSN, card number) directly in the event payload sent to a third-party service.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "analytics\\.track\\s*\\([^)]*(?:password|ssn|card[-_]?number|cvv|api[-_]?key|token)",
+      "mixpanel\\.track\\s*\\([^)]*(?:password|ssn|card[-_]?number|cvv|api[-_]?key|token)",
+      "gtag\\s*\\(\\s*[\"']event[\"'][^)]*(?:password|ssn|card[-_]?number|cvv|token)",
+      "Sentry\\.(?:captureException|captureMessage|setContext|setUser|setExtra)\\s*\\([^)]*(?:password|ssn|card[-_]?number|cvv)",
+      "Sentry\\.setUser\\s*\\(\\s*\\{[^}]*(?:password|ssn|card[-_]?number|cvv)"
+    ],
+    "asvs_controls": [
+      "V14.2.3"
+    ]
+  },
+  "SBOM_MAINTAINED_MARKER": {
+    "rule_id": "SBOM_MAINTAINED_MARKER",
+    "name": "SBOM Generation Marker",
+    "owasp": "A06",
+    "cwe": "CWE-1104",
+    "description": "Informational marker for a Software Bill of Materials (SBOM) generation step or file (CycloneDX, Syft, sbom.json) found in the repository or CI configuration.",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "[Cc]yclone[Dd][Xx]",
+      "\\bsyft\\b",
+      "sbom\\.(?:json|xml)",
+      "sbom-action",
+      "anchore/sbom-action"
+    ],
+    "asvs_controls": [
+      "V15.1.2"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "TEST_DEBUG_CODE_IN_PRODUCTION": {
+    "rule_id": "TEST_DEBUG_CODE_IN_PRODUCTION",
+    "name": "Leftover Test/Debug Code Without Environment Gate",
+    "owasp": "A05",
+    "cwe": "CWE-489",
+    "description": "Leftover debug/test route, hardcoded test-user credential check, or a 'remove before prod' marker was found with no surrounding environment check (DEBUG/ENV/environment) gating it out of production.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "DEBUG",
+      "os.environ",
+      "app.debug",
+      "NODE_ENV"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:username|user)\\s*==\\s*[\"'](?:testuser|test_user|demo_user|admin_test)[\"']",
+      "@(?:app|bp|router|\\w+)\\.route\\s*\\(\\s*[\"'][^\"']*(?:/test|/dev|/debug[-_]?only)[^\"']*[\"'][^\\n]*\\)(?![\\s\\S]{0,200}(?:DEBUG|os\\.environ|app\\.debug))[\\s\\S]{0,200}def\\s+\\w+\\(",
+      "(?:#|//)\\s*(?:TODO:?\\s*)?[Rr]emove\\s+(?:this\\s+)?before\\s+(?:prod(?:uction)?|deploy(?:ing)?)\\b"
+    ],
+    "asvs_controls": [
+      "V15.2.3"
+    ]
+  },
+  "HTTP_PARAMETER_POLLUTION_MISSING_DEFENSE": {
+    "rule_id": "HTTP_PARAMETER_POLLUTION_MISSING_DEFENSE",
+    "name": "HTTP Parameter Pollution Missing Defense",
+    "owasp": "A03",
+    "cwe": "CWE-235",
+    "description": "A route handler reads a query parameter (req.query.x, request.args.get) and uses it in a security-sensitive way (query building, comparison, redirect) without validating for duplicate parameters (Array.isArray/getlist) or hpp-style middleware protection.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "Array.isArray",
+      "getlist",
+      "hpp("
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "request\\.args\\.get\\s*\\(\\s*[\"']\\w+[\"']\\s*\\)(?![\\s\\S]{0,200}(?:getlist|Array\\.isArray))[\\s\\S]{0,200}(?:\\.execute\\s*\\(|cursor\\.execute|WHERE\\s)",
+      "req\\.query\\.\\w+(?![\\s\\S]{0,200}Array\\.isArray)[\\s\\S]{0,200}(?:\\.query\\s*\\(|res\\.redirect\\s*\\(|===)",
+      "req\\.query\\[[\"']\\w+[\"']\\](?![\\s\\S]{0,200}Array\\.isArray)[\\s\\S]{0,200}(?:\\.query\\s*\\(|res\\.redirect\\s*\\()"
+    ],
+    "asvs_controls": [
+      "V15.3.7"
+    ]
+  },
+  "UTC_TIMESTAMP_LOGGING_MARKER": {
+    "rule_id": "UTC_TIMESTAMP_LOGGING_MARKER",
+    "name": "UTC/ISO8601 Timestamp Logging Marker",
+    "owasp": "A09",
+    "cwe": "CWE-778",
+    "description": "Informational marker for log timestamps generated with a synchronized, unambiguous clock source (datetime.utcnow(), datetime.now(timezone.utc), Date.toISOString()) rather than unqualified local time.",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "datetime\\.utcnow\\s*\\(\\s*\\)",
+      "datetime\\.now\\s*\\(\\s*(?:timezone\\.utc|tz\\s*=\\s*timezone\\.utc|datetime\\.UTC)\\s*\\)",
+      "\\.toISOString\\s*\\(\\s*\\)",
+      "logging\\.Formatter\\.converter\\s*=\\s*time\\.gmtime"
+    ],
+    "asvs_controls": [
+      "V16.2.2"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "SENSITIVE_DATA_IN_LOG_STATEMENT": {
+    "rule_id": "SENSITIVE_DATA_IN_LOG_STATEMENT",
+    "name": "Sensitive Data Embedded Directly in Log Statement",
+    "owasp": "A09",
+    "cwe": "CWE-532",
+    "description": "A log call embeds a sensitive field (password, token, SSN, card number) directly in the message via string interpolation or concatenation, with no redaction/masking call wrapping the value.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "mask(",
+      "redact(",
+      "anonymize(",
+      "hash("
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "logger\\.(?:info|debug|warning|error|critical)\\s*\\(\\s*f[\"'][^\"']*\\{(?!(?:mask|redact|hash|anonymize)\\()[^}]*(?:ssn|password|token|card[-_]?number|cvv|secret|api[-_]?key)[^}]*\\}",
+      "(?:console\\.(?:log|info|warn|error)|logger\\.(?:info|debug|warn|error))\\s*\\(\\s*`[^`]*\\$\\{(?!(?:mask|redact|hash|anonymize)\\()[^}]*(?:ssn|password|token|cardNumber|card_number|cvv|secret|apiKey)[^}]*\\}[^`]*`",
+      "logger\\.(?:info|debug|warning|error)\\s*\\([^)]*\\+\\s*(?:\\w+\\.)?(?:ssn|password|token|card[-_]?number|cvv)\\b"
+    ],
+    "asvs_controls": [
+      "V16.2.5"
+    ]
+  },
+  "AUTH_OPERATION_LOGGED_MARKER": {
+    "rule_id": "AUTH_OPERATION_LOGGED_MARKER",
+    "name": "Authentication Operation Logging Marker",
+    "owasp": "A09",
+    "cwe": "CWE-778",
+    "description": "Informational marker for a log call found inside a login, logout, password-change, or MFA handler (control V16.3.1).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.(?:route|get|post)\\s*\\(\\s*[\"'][^\"']*(?:login|logout|log[-_]?out|password[-_]?change|change[-_]?password|mfa|2fa|two[-_]?factor)[^\"']*[\"'][^\\n]*\\)[\\s\\S]{0,300}(?:logger\\.|logging\\.|log\\.(?:info|warning|error))",
+      "(?:router|app)\\.(?:post|get)\\s*\\(\\s*[\"'][^\"']*(?:login|logout|password[-_]?change|mfa|2fa)[^\"']*[\"']\\s*,[\\s\\S]{0,300}(?:console\\.log|logger\\.(?:info|warn|error)|winston\\.|pino\\.)"
+    ],
+    "asvs_controls": [
+      "V16.3.1"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "AUTHZ_DENIAL_LOGGED_MARKER": {
+    "rule_id": "AUTHZ_DENIAL_LOGGED_MARKER",
+    "name": "Authorization Denial Logging Marker",
+    "owasp": "A09",
+    "cwe": "CWE-778",
+    "description": "Informational marker for an authorization-denial branch (403/Forbidden) followed by a log call (control V16.3.2).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:abort\\s*\\(\\s*403|raise\\s+(?:Forbidden|PermissionDenied|Unauthorized))[\\s\\S]{0,150}(?:logger\\.|logging\\.|log\\.(?:warning|error))",
+      "(?:logger\\.|logging\\.)\\w+\\s*\\([^)]*(?:forbidden|unauthorized|denied|permission)[^)]*\\)[\\s\\S]{0,150}(?:abort\\s*\\(\\s*403|403)",
+      "res\\.status\\s*\\(\\s*403\\s*\\)[\\s\\S]{0,150}(?:console\\.(?:log|warn|error)|logger\\.(?:warn|error))"
+    ],
+    "asvs_controls": [
+      "V16.3.2"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "SIGNALING_FLOOD_RATE_LIMITING": {
+    "rule_id": "SIGNALING_FLOOD_RATE_LIMITING",
+    "name": "Rate Limiting Marker Near WebRTC Signaling Handler",
+    "owasp": "A04",
+    "cwe": "CWE-770",
+    "description": "Informational marker for a rate-limiting decorator/middleware found near a WebRTC signaling handler (socket.on('offer'/'answer'/'ice-candidate') or a /signal, /offer, /answer HTTP route), guarding against signaling-channel flood (control V17.3.1).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "socket\\.on\\s*\\(\\s*['\"](?:offer|answer|ice-candidate|ice_candidate|join|signal)['\"][\\s\\S]{0,200}(?:rateLimit\\s*\\(|express-rate-limit|limiter\\.)",
+      "(?:rateLimit\\s*\\(|express-rate-limit|limiter\\.)[\\s\\S]{0,200}socket\\.on\\s*\\(\\s*['\"](?:offer|answer|ice-candidate|ice_candidate|signal)['\"]",
+      "@(?:app|bp|router|\\w+)\\.(?:route|post)\\s*\\(\\s*[\"'][^\"']*(?:/signal|/offer|/answer|/ice)[^\"']*[\"'][^\\n]*\\)[\\s\\S]{0,200}@(?:limiter\\.limit|rate_limit)\\s*\\(",
+      "@(?:limiter\\.limit|rate_limit)\\s*\\([^)]*\\)[\\s\\S]{0,200}@(?:app|bp|router|\\w+)\\.(?:route|post)\\s*\\(\\s*[\"'][^\"']*(?:/signal|/offer|/answer|/ice)[^\"']*[\"']"
+    ],
+    "asvs_controls": [
+      "V17.3.1"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "AUTH_CHECK_FAILS_OPEN": {
+    "rule_id": "AUTH_CHECK_FAILS_OPEN",
+    "name": "Authorization Check Fails Open on Exception",
+    "owasp": "A01",
+    "cwe": "CWE-636",
+    "description": "An exception handler around an auth/authorization check defaults to allow instead of deny (except: return True, catch(e){ next() }), so an unexpected error grants access rather than denying it.",
+    "severity": "critical",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "return False",
+      "return false",
+      "raise",
+      "next(err)",
+      "abort(403)"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?im)^\\s*except\\s+.*:\\s*\\n\\s*return\\s+True\\s*$",
+      "except\\s*:\\s*\\n\\s*return\\s+True",
+      "except\\s+\\w+\\s*:\\s*\\n\\s*return\\s+True",
+      "catch\\s*\\(\\s*\\w*\\s*\\)\\s*\\{\\s*next\\s*\\(\\s*\\)\\s*;?\\s*\\}",
+      "catch\\s*\\(\\s*\\w*\\s*\\)\\s*\\{\\s*return\\s+true\\s*;?\\s*\\}"
+    ],
+    "file_patterns": [
+      "(?i)\\.(?:py|js|jsx|ts|tsx)$"
+    ],
+    "asvs_controls": [
+      "V16.5.3"
+    ]
+  },
+  "STRUCTURED_LOGGING_MARKER": {
+    "rule_id": "STRUCTURED_LOGGING_MARKER",
+    "name": "Structured/Correlatable Logging Marker",
+    "owasp": "A09",
+    "cwe": "CWE-778",
+    "description": "Informational marker for structured, machine-parseable logging setup (python-json-logger, structlog, winston JSON format, pino) which makes log entries correlatable in a common format across services (control V16.2.4).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "pythonjsonlogger",
+      "jsonlogger\\.JsonFormatter",
+      "\\bstructlog\\b",
+      "winston\\.format\\.json\\s*\\(",
+      "require\\s*\\(\\s*['\"]pino['\"]\\s*\\)",
+      "import\\s+pino\\s+from\\s+['\"]pino['\"]"
+    ],
+    "asvs_controls": [
+      "V16.2.4"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "ADMIN_SESSION_TERMINATION_MARKER": {
+    "rule_id": "ADMIN_SESSION_TERMINATION_MARKER",
+    "name": "Admin Session Termination Endpoint Marker",
+    "owasp": "A07",
+    "cwe": "CWE-613",
+    "description": "Informational marker for an administrative endpoint or function that terminates another user's active session (control V7.4.5).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.(?:route|delete|post)\\s*\\(\\s*[\"'][^\"']*/admin/[^\"']*sessions?[^\"']*[\"']",
+      "(?:router|app)\\.(?:delete|post)\\s*\\(\\s*[\"'][^\"']*/admin/[^\"']*sessions?[^\"']*[\"']",
+      "def\\s+\\w*admin\\w*(?:terminate|revoke|kill)_session\\w*\\(",
+      "(?:terminateUserSession|revokeUserSession|adminTerminateSession|admin_terminate_session)\\s*\\("
+    ],
+    "asvs_controls": [
+      "V7.4.5"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "SELF_SERVICE_SESSION_MANAGEMENT_MARKER": {
+    "rule_id": "SELF_SERVICE_SESSION_MANAGEMENT_MARKER",
+    "name": "Self-Service Session Management Endpoint Marker",
+    "owasp": "A07",
+    "cwe": "CWE-613",
+    "description": "Informational marker for a self-service endpoint letting a user view or terminate their own active sessions (control V7.5.2).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.route\\s*\\(\\s*[\"'][^\"']*/(?:me|account|profile)/sessions[^\"']*[\"']",
+      "(?:router|app)\\.get\\s*\\(\\s*[\"'][^\"']*/sessions[\"']",
+      "(?:router|app)\\.delete\\s*\\(\\s*[\"'][^\"']*/sessions/:(?:id|sessionId)[\"']",
+      "def\\s+\\w*(?:list_my_sessions|get_active_sessions|terminate_my_session)\\w*\\("
+    ],
+    "asvs_controls": [
+      "V7.5.2"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "TOKEN_REVOCATION_ENDPOINT_MARKER": {
+    "rule_id": "TOKEN_REVOCATION_ENDPOINT_MARKER",
+    "name": "Token Revocation Endpoint Marker",
+    "owasp": "A07",
+    "cwe": "CWE-613",
+    "description": "Informational marker for a token revocation endpoint or function (RFC 7009-style /oauth/revoke, revoke_token) allowing refresh/reference tokens to be revoked (control V10.4.9).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.route\\s*\\(\\s*[\"'][^\"']*/(?:oauth/)?revoke[^\"']*[\"']",
+      "(?:router|app)\\.post\\s*\\(\\s*[\"'][^\"']*/(?:oauth/)?revoke[^\"']*[\"']",
+      "def\\s+revoke_(?:token|refresh_token)\\w*\\(",
+      "revokeToken\\s*\\("
+    ],
+    "asvs_controls": [
+      "V10.4.9"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "CONSENT_MANAGEMENT_ENDPOINT_MARKER": {
+    "rule_id": "CONSENT_MANAGEMENT_ENDPOINT_MARKER",
+    "name": "Consent Management Endpoint Marker",
+    "owasp": "A07",
+    "cwe": "CWE-284",
+    "description": "Informational marker for an endpoint letting a user review or revoke previously granted OAuth/OIDC consents (control V10.7.3).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.route\\s*\\(\\s*[\"'][^\"']*consents?[^\"']*[\"']",
+      "(?:router|app)\\.(?:get|delete)\\s*\\(\\s*[\"'][^\"']*consents?[^\"']*[\"']",
+      "def\\s+revoke_consent\\w*\\(",
+      "revokeConsent\\s*\\("
+    ],
+    "asvs_controls": [
+      "V10.7.3"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "LOG_TRANSPORT_PLAINTEXT": {
+    "rule_id": "LOG_TRANSPORT_PLAINTEXT",
+    "name": "Logs Shipped Over Plaintext Transport",
+    "owasp": "A02",
+    "cwe": "CWE-319",
+    "description": "Logs are shipped to a remote collector over plain HTTP or an explicitly non-TLS transport, instead of an encrypted connection (control V16.4.3).",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "https://",
+      "ssl: true",
+      "secure=True"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:LOG_ENDPOINT|SYSLOG_URL|LOGSTASH_URL|LOG_SHIPPER_URL)\\s*[:=]\\s*['\"]http://(?!localhost|127\\.0\\.0\\.1)",
+      "winston\\.transports\\.Http\\s*\\(\\s*\\{(?![^}]*ssl\\s*:\\s*true)[^}]*\\}",
+      "logging\\.handlers\\.HTTPHandler\\s*\\([^)]*secure\\s*=\\s*False"
+    ],
+    "asvs_controls": [
+      "V16.4.3"
+    ]
+  },
+  "CENTRALIZED_LOG_SHIPPING_MARKER": {
+    "rule_id": "CENTRALIZED_LOG_SHIPPING_MARKER",
+    "name": "Centralized Log Shipping Marker",
+    "owasp": "A09",
+    "cwe": "CWE-778",
+    "description": "Informational marker for a known centralized-logging integration (Datadog, Splunk, ELK/Logstash, CloudWatch Logs, Fluentd, Loki) being configured, evidence logs are sent to an approved destination rather than left local-only (control V16.2.3).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "\\bddtrace\\b",
+      "datadog\\w*\\.(?:initialize|configure)\\s*\\(",
+      "SplunkHandler\\s*\\(",
+      "\\bsplunk_hec\\b",
+      "LogstashHandler\\s*\\(",
+      "boto3\\.client\\s*\\(\\s*['\"]logs['\"]\\s*\\)",
+      "winston-cloudwatch",
+      "CloudWatchTransport",
+      "fluent-logger",
+      "FluentSender\\s*\\(",
+      "winston-loki"
+    ],
+    "asvs_controls": [
+      "V16.2.3"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "TENANT_ISOLATION_MISSING": {
+    "rule_id": "TENANT_ISOLATION_MISSING",
+    "name": "Tenant-Scoped Route Missing Tenant Filter",
+    "owasp": "A01",
+    "cwe": "CWE-639",
+    "description": "A route explicitly scoped to a tenant (/tenants/<id>/...) queries data without filtering by tenant_id/org_id, allowing cross-tenant data access in a multi-tenant application (control V8.4.1).",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "tenant_id",
+      "org_id",
+      "organization_id",
+      "current_tenant",
+      "tenantId",
+      "organizationId"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.route\\s*\\(\\s*[\"'][^\"']*/tenants?/<[^>]+>[^\"']*[\"'][^\\n]*\\)[\\s\\S]{0,150}def\\s+\\w+\\([^)]*\\)\\s*:(?![\\s\\S]{0,250}(?:tenant_id\\s*=|\\.tenant_id|org_id\\s*=|organization_id\\s*=|current_tenant))[\\s\\S]{0,250}\\.(?:filter_by|get|query)\\s*\\(",
+      "(?:router|app)\\.(?:get|post|put|delete)\\s*\\(\\s*[\"'][^\"']*/tenants?/:[^\"']+[\"']\\s*,\\s*(?:async\\s*)?\\([^)]*\\)\\s*=>\\s*\\{(?![\\s\\S]{0,250}(?:tenant_id|org_id|organizationId|currentTenant|tenantId))[\\s\\S]{0,250}\\.(?:findOne|findById|find)\\s*\\("
+    ],
+    "asvs_controls": [
+      "V8.4.1"
     ]
   }
 }
