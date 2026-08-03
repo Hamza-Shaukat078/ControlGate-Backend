@@ -7,6 +7,9 @@ from app.api.deps import get_current_user, get_db
 from app.db.mongo import get_mongo_db
 from app.models.repository import Repository
 from app.services.asvs_service import ASVSService
+from app.core.permissions import can_access_resource
+from app.db.mongo import to_object_id
+from app.enums.role import UserRole
 
 router = APIRouter(prefix="/asvs", tags=["asvs"])
 
@@ -44,9 +47,12 @@ async def get_portfolio_dashboard(
     with null stats so the dashboard can show a "never scanned" state.
     """
     service = ASVSService(db)
-    portfolio = await service.get_portfolio_dashboard()
+    portfolio = await service.get_portfolio_dashboard(user=user)
 
-    result = await session.execute(select(Repository))
+    repo_stmt = select(Repository)
+    if user.get("role") != UserRole.ADMIN.value:
+        repo_stmt = repo_stmt.where(Repository.owner_user_id == str(user.get("id")))
+    result = await session.execute(repo_stmt)
     all_repos = result.scalars().all()
     repo_names = {r.id: r.name for r in all_repos}
 
@@ -88,9 +94,18 @@ async def get_control(
         raise HTTPException(status_code=404, detail=f"Unknown control_id: {control_id}")
 
     result = None
-    latest_scan = await db.scans.find_one({"state": "COMPLETED"}, sort=[("finished_at", -1)])
+    scan_query = {"state": "COMPLETED"}
+    if user.get("role") != UserRole.ADMIN.value:
+        user_oid = to_object_id(user.get("id", ""))
+        values = [str(user.get("id"))]
+        if user_oid:
+            values.append(user_oid)
+        scan_query["user_id"] = {"$in": values}
+    latest_scan = await db.scans.find_one(scan_query, sort=[("finished_at", -1)])
     if latest_scan:
-        results = await service.build_results_for_scan(latest_scan["scan_id"])
+        if not can_access_resource(user, str(latest_scan.get("user_id"))):
+            raise HTTPException(status_code=403, detail="Not authorized to access this scan")
+        results = await service.build_results_for_scan(latest_scan["scan_id"], user=user)
         result = results.get(control_id)
 
     return {"control": control, "result": result}

@@ -115,20 +115,23 @@ class TestRegisterLoginScanWorkflow:
             mock_p = MagicMock()
             mock_p.analyze_code = AsyncMock(return_value=mock_result)
             gp.return_value = mock_p
-            scan_r = fresh_client.post("/api/v1/scan/scan", json={
+            scan_r = fresh_client.post("/api/v1/scan", json={
                 "code": VULNERABLE_CODE,
                 "language": "python",
                 "filename": "app.py",
             }, headers=headers)
         assert scan_r.status_code == 200
         scan_body = scan_r.json()
-        assert "scan_id" in scan_body
+        # POST /api/v1/scan is the synchronous direct-code-scan endpoint — it
+        # returns results inline with no persisted job to poll, so its
+        # ScanResponse schema has no scan_id field (unlike /api/v1/scans/start).
+        assert scan_body.get("success") is True
 
         # 4. Verify vulnerabilities were returned
         assert scan_body.get("vulnerabilities_found", 0) >= 0
 
     def test_token_required_to_scan(self, fresh_client):
-        r = fresh_client.post("/api/v1/scan/scan", json={
+        r = fresh_client.post("/api/v1/scan", json={
             "code": "x = 1",
             "language": "python",
         })

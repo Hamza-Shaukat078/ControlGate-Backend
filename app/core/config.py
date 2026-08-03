@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,6 +8,16 @@ class Settings(BaseSettings):
     ENV: str = Field(default="dev")
     API_V1_STR: str = Field(default="/api/v1")
     PROJECT_NAME: str = Field(default="VULCAN API")
+
+    # Number of reverse-proxy hops in front of this app that are trusted to
+    # append an honest entry to X-Forwarded-For (e.g. 1 nginx). 0 (default) —
+    # never trust XFF; rate limiting keys on the direct socket peer address
+    # only. Blindly trusting XFF without knowing the real proxy topology lets
+    # a client set an arbitrary claimed IP and dodge the limit (the same
+    # SPOOFABLE_PROXY_HEADER risk this scanner itself flags elsewhere) — only
+    # raise this above 0 if the deployment actually sits behind that many
+    # trusted proxies.
+    TRUSTED_PROXY_HOP_COUNT: int = Field(default=0)
     BACKEND_CORS_ORIGINS: str = Field(default="http://localhost:3000")
 
     DATABASE_URL: str = Field(default="sqlite+aiosqlite:///./vulcan.db")
@@ -19,13 +29,34 @@ class Settings(BaseSettings):
     MONGO_USER: str = Field(default="")
     MONGO_PASSWORD: str = Field(default="")
 
-    JWT_SECRET: str = Field(default="change-me-super-secret")
+    JWT_SECRET: str = Field(default="")
     JWT_ALGORITHM: str = Field(default="HS256")
+
+    @field_validator("JWT_SECRET")
+    @classmethod
+    def _require_jwt_secret(cls, v: str) -> str:
+        # JWT_SECRET signs every access/refresh token AND (via crypto.py, which
+        # derives its Fernet key from this same value) is the encryption key
+        # for repository access tokens at rest. An empty default here used to
+        # be silently accepted; if the env var is ever missing in some
+        # deployment, both of those would fall back to a key derived from the
+        # empty string — a fixed, publicly known value. Fail startup instead
+        # of booting insecurely.
+        if not v or not v.strip():
+            raise ValueError(
+                "JWT_SECRET must be set — it signs auth tokens and derives the "
+                "repository-token encryption key. Set it in .env or the "
+                "environment before starting the app."
+            )
+        return v
+
+    JWT_ISSUER: str = Field(default="controlgate-api")
+    JWT_AUDIENCE: str = Field(default="controlgate-users")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
     REFRESH_TOKEN_EXPIRE_MINUTES: int = Field(default=43200)
 
     DEFAULT_ADMIN_EMAIL: str = Field(default="admin@vulcan.ai")
-    DEFAULT_ADMIN_PASSWORD: str = Field(default="admin123!")
+    DEFAULT_ADMIN_PASSWORD: str = Field(default="")
 
     FRONTEND_BASE_URL: str = Field(default="http://localhost:3000")
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = Field(default=30)

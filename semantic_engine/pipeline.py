@@ -5,10 +5,12 @@ Production-grade security scanning with guardrails and error handling.
 """
 import asyncio
 import os
+import re
 import time
 import logging
+from collections import defaultdict
 from typing import List, Dict, Optional, Any
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, replace
 from pathlib import Path
 
 from app.schemas.graph import SemanticGraph
@@ -30,6 +32,94 @@ MAX_DEPENDENCY_PACKAGES = 150
 DEPENDENCY_SCAN_TIMEOUT_SECONDS = 20
 
 
+# ── Shared "is this the same finding" logic ───────────────────────────────────
+# Used by both _filter_discovery_slices (pre-classification, CodeSlice objects)
+# and _dedupe_vulnerabilities (post-classification, ClassifiedVulnerability
+# objects) — anything with .location ({"file", "start_line", "end_line"}) and
+# .sink_label works. Previously each kept its own exact-tuple key
+# (file, start_line, end_line, sink_label[, rule_name]), so a minor line-range
+# or label discrepancy between two detectors of the *same* vulnerability (e.g.
+# SQL_INJECTION's regex and PathDiscovery's taint graph both catching one
+# cursor.execute(...) call, with slightly different snippet line ranges) let
+# real duplicates survive as separate findings.
+
+_SINK_CALL_RE = re.compile(r'([a-zA-Z_][\w.]*)\s*\(')
+
+
+def _normalize_sink(label: Optional[str]) -> str:
+    """
+    Canonicalizes a sink_label so two detectors describing the same call
+    converge on the same token — lowercased, self./this. stripped, trailing
+    "()" stripped, and reduced to just the callee name when the label looks
+    like a call (`Cursor.Execute(...)` and `cursor.execute` both -> "cursor.execute").
+    """
+    if not label:
+        return ""
+    label = label.strip().lower()
+    match = _SINK_CALL_RE.search(label)
+    normalized = match.group(1) if match else label.rstrip('();')
+    return re.sub(r'^(?:self|this)\.', '', normalized)
+
+
+def _same_finding(a, b) -> bool:
+    """
+    True if two findings are the same underlying vulnerability instance: same
+    file, overlapping line range, same normalized sink. Deliberately does NOT
+    compare rule_id/rule_name — two different rules genuinely converging on
+    the same call (SQL_INJECTION's regex + PathDiscovery's graph both catching
+    one cursor.execute(...), or a legitimate dual-signal pair like XSS +
+    UNSAFE_DOM_RENDERING both firing on one `.innerHTML =` line) are the same
+    finding for display purposes. The caller is responsible for merging rule
+    metadata (see _dedupe_vulnerabilities) rather than discarding it — this
+    function only answers "same or not".
+    """
+    a_loc, b_loc = a.location or {}, b.location or {}
+    if a_loc.get("file") != b_loc.get("file"):
+        return False
+    a_start, a_end = a_loc.get("start_line", 0), a_loc.get("end_line", 0)
+    b_start, b_end = b_loc.get("start_line", 0), b_loc.get("end_line", 0)
+    if not (a_start <= b_end and b_start <= a_end):
+        return False
+    return _normalize_sink(a.sink_label) == _normalize_sink(b.sink_label)
+
+
+def _cluster_by_same_finding(items: list) -> List[list]:
+    """
+    Groups items (CodeSlice or ClassifiedVulnerability) into clusters via
+    union-find over _same_finding. Bucketed by file first since _same_finding
+    always requires an exact file match, keeping the pairwise comparison
+    O(n^2) per file instead of across the whole result set.
+    """
+    by_file: Dict[Optional[str], List[int]] = defaultdict(list)
+    for idx, item in enumerate(items):
+        by_file[(item.location or {}).get("file")].append(idx)
+
+    parent = list(range(len(items)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
+
+    for indices in by_file.values():
+        for a in range(len(indices)):
+            for b in range(a + 1, len(indices)):
+                i, j = indices[a], indices[b]
+                if _same_finding(items[i], items[j]):
+                    union(i, j)
+
+    clusters: Dict[int, list] = defaultdict(list)
+    for idx in range(len(items)):
+        clusters[find(idx)].append(items[idx])
+    return list(clusters.values())
+
+
 @dataclass
 class PipelineConfig:
     """Configuration for semantic analysis pipeline."""
@@ -43,7 +133,12 @@ class PipelineConfig:
     enable_path_discovery: bool = True
     path_score_threshold: float = 0.35
     max_candidate_paths: int = 200
-    
+    # How many distinct file boundaries a single PathDiscovery BFS path may
+    # cross — see PathDiscovery.max_cross_file_hops. Bounds per-source search
+    # cost independent of total repo size instead of the old hard cutoff at
+    # 3000 graph nodes (which silently disabled discovery entirely past that).
+    max_cross_file_hops: int = 2
+
     def __post_init__(self):
         """Load enable_llm from environment if not explicitly set."""
         if self.enable_llm is None:
@@ -284,11 +379,17 @@ class SemanticPipeline:
                 # Run the sync query executor in a thread so we don't block the
                 # event loop. This is critical for the benchmark background task
                 # which shares the loop with job-status poll requests.
-                slices = await asyncio.to_thread(
-                    self.query_executor.execute_query,
-                    graph, query, source_code, source_code_map,
+                slices = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self.query_executor.execute_query,
+                        graph, query, source_code, source_code_map,
+                    ),
+                    timeout=self.config.query_timeout,
                 )
                 all_slices.extend(slices)
+            except asyncio.TimeoutError:
+                logger.warning(f"Query {query.rule_id} timed out — skipped")
+                continue
             except Exception as e:
                 logger.error(f"Query {query.rule_id} failed: {e}")
                 continue
@@ -305,7 +406,8 @@ class SemanticPipeline:
         discovery = PathDiscovery(
             max_depth=self.config.max_path_length,
             max_candidates=self.config.max_candidate_paths,
-            score_threshold=self.config.path_score_threshold
+            score_threshold=self.config.path_score_threshold,
+            max_cross_file_hops=self.config.max_cross_file_hops
         )
         # Run sync discovery in a thread — same reasoning as _execute_queries.
         return await asyncio.to_thread(
@@ -597,28 +699,29 @@ class SemanticPipeline:
         query_slices: List[CodeSlice]
     ) -> List[CodeSlice]:
         """
-        Remove discovery slices that are already covered by rule-based slices.
+        Drop a discovery slice already covered by a rule-based slice from the
+        SAME rule — true re-detection, not worth spending LLM budget on twice.
+        Uses _same_finding (overlapping range + normalized sink) rather than
+        an exact location/label match, since a discovery slice's snippet
+        window rarely lines up byte-for-byte with the regex slice's.
+
+        Deliberately scoped to same-rule_id only: a discovery slice attributed
+        (via PathDiscovery._attribute_rule) to a DIFFERENT rule than a nearby
+        query slice is a genuinely distinct signal at this pre-classification
+        stage, so it's kept here. If it turns out to describe the same
+        underlying finding as that other rule's slice, _dedupe_vulnerabilities
+        merges them properly after classification, unioning both rules' ASVS
+        mappings onto one result instead of one silently vanishing before it
+        ever got the chance.
         """
-        covered = set()
+        query_slices_by_rule: Dict[str, List[CodeSlice]] = defaultdict(list)
         for s in query_slices:
-            loc = s.location or {}
-            covered.add((
-                loc.get("file"),
-                loc.get("start_line"),
-                loc.get("end_line"),
-                s.sink_label
-            ))
+            query_slices_by_rule[s.rule_id].append(s)
 
         filtered = []
         for s in discovery_slices:
-            loc = s.location or {}
-            key = (
-                loc.get("file"),
-                loc.get("start_line"),
-                loc.get("end_line"),
-                s.sink_label
-            )
-            if key in covered:
+            same_rule_query_slices = query_slices_by_rule.get(s.rule_id, [])
+            if any(_same_finding(s, q) for q in same_rule_query_slices):
                 continue
             filtered.append(s)
         return filtered
@@ -628,8 +731,19 @@ class SemanticPipeline:
         vulnerabilities: List[ClassifiedVulnerability]
     ) -> List[ClassifiedVulnerability]:
         """
-        Collapse duplicate findings that point to the same rule + sink at the same location.
-        Keep the most "sure" finding while avoiding noisy duplicates.
+        Collapse findings that _same_finding considers the same underlying
+        vulnerability instance into one, keeping the most "sure" one as the
+        display primary — but unioning the rest of the cluster's rule_ids
+        onto it via contributing_rule_ids instead of just discarding them.
+
+        _same_finding ignores rule identity by design, so this also merges
+        genuine dual-signal pairs (e.g. XSS + UNSAFE_DOM_RENDERING both firing
+        on one `.innerHTML =` line) into a single displayed finding rather
+        than two near-identical entries. That's safe specifically because of
+        the union: _format_vulnerability reads asvs_controls from
+        [rule_id] + contributing_rule_ids, so both rules' ASVS controls still
+        get a verdict — nothing is silently dropped by folding two rules'
+        findings together.
         """
         if not vulnerabilities:
             return vulnerabilities
@@ -650,21 +764,20 @@ class SemanticPipeline:
             path_len = len(v.path_nodes or [])
             return (strength, has_snippet, conf, sev, -path_len)
 
-        best_by_key: dict[tuple, ClassifiedVulnerability] = {}
-        for v in vulnerabilities:
-            loc = v.location or {}
-            key = (
-                v.rule_name,
-                loc.get("file"),
-                loc.get("start_line"),
-                loc.get("end_line"),
-                v.sink_label,
-            )
-            existing = best_by_key.get(key)
-            if existing is None or rank(v) > rank(existing):
-                best_by_key[key] = v
+        merged: List[ClassifiedVulnerability] = []
+        for cluster in _cluster_by_same_finding(vulnerabilities):
+            primary = max(cluster, key=rank)
+            other_rule_ids = {v.rule_id for v in cluster} - {primary.rule_id}
+            if other_rule_ids:
+                primary = replace(
+                    primary,
+                    contributing_rule_ids=sorted(
+                        set(primary.contributing_rule_ids) | other_rule_ids
+                    ),
+                )
+            merged.append(primary)
 
-        return list(best_by_key.values())
+        return merged
     
     def _detect_cycles(self, graph: SemanticGraph) -> bool:
         """
@@ -778,7 +891,24 @@ class SemanticPipeline:
             Dictionary representation
         """
         cvss_score = self._compute_cvss_score(vuln.final_severity, vuln.llm_exploitability)
-        rule = self.query_store.get_query(vuln.rule_id)
+
+        # _dedupe_vulnerabilities may have merged this finding with one or more
+        # other rules' findings for the same underlying vulnerability instance
+        # (see _same_finding) — contributing_rule_ids holds the rest of that
+        # cluster. Union every contributing rule's asvs_controls onto this one
+        # result instead of only reading the primary rule_id's mapping, so
+        # folding e.g. XSS + UNSAFE_DOM_RENDERING into one displayed finding
+        # doesn't silently drop UNSAFE_DOM_RENDERING's V3.2.2 mapping.
+        all_rule_ids = [vuln.rule_id] + list(vuln.contributing_rule_ids)
+        rules = [r for r in (self.query_store.get_query(rid) for rid in all_rule_ids) if r]
+        primary_rule = rules[0] if rules else None
+
+        asvs_controls: List[str] = []
+        for r in rules:
+            for control_id in r.asvs_controls:
+                if control_id not in asvs_controls:
+                    asvs_controls.append(control_id)
+
         return {
             "id": vuln.slice_id,
             "type": vuln.rule_name,
@@ -787,8 +917,27 @@ class SemanticPipeline:
             "cvss_score": cvss_score,
             "owasp": vuln.owasp,
             "cwe": vuln.cwe,
-            "asvs_controls": rule.asvs_controls if rule else [],
-            "asvs_finding_polarity": rule.finding_polarity if rule else "vulnerable",
+            "asvs_controls": asvs_controls,
+            "asvs_finding_polarity": primary_rule.finding_polarity if primary_rule else "vulnerable",
+            # Other rules folded into this one by _dedupe_vulnerabilities, for
+            # anything that wants to show the full picture rather than just the
+            # primary rule_id/rule_name above.
+            "contributing_rules": [
+                {"rule_id": r.rule_id, "name": r.name} for r in rules[1:]
+            ],
+            # True only when NO rule at all — primary or merged-in — resolved
+            # to a real catalog entry. A path-discovery finding whose source
+            # and sink didn't both match a single existing rule (see
+            # PathDiscovery._attribute_rule) has no owasp/cwe/asvs mapping to
+            # fall back on — it's a genuinely novel flow, not a bug. Flag it
+            # explicitly so the UI surfaces it as "needs manual triage" instead
+            # of letting it quietly disappear from any view that groups/
+            # filters by owasp, cwe, or ASVS control. (Checking `not rules`
+            # rather than `rule_id == "PATH_DISCOVERY"` matters here: if a real
+            # rule's finding got merged into a PATH_DISCOVERY-tagged primary,
+            # that real rule's ASVS controls are still present via `rules`, so
+            # this must NOT be flagged as needing triage.)
+            "needs_manual_triage": not rules,
 
             "location": {
                 "file": vuln.location.get("file", "unknown"),

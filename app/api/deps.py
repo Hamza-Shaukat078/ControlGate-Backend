@@ -29,6 +29,9 @@ async def get_current_user(
         payload = decode_token(token)
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    jti = payload.get("jti")
+    if jti and await db.token_revocations.find_one({"jti": jti}):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked")
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
@@ -38,6 +41,8 @@ async def get_current_user(
     user = await db.users.find_one({"_id": object_id})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account is inactive")
     role = user.get("role") or UserRole.NORMAL.value
     return {
         "id": str(user["_id"]),

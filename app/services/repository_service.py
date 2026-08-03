@@ -1,9 +1,7 @@
 import os
 import shutil
 import subprocess
-import tarfile
 import tempfile
-import zipfile
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +9,10 @@ from sqlalchemy import select
 from fastapi import HTTPException, status
 from app.models.repository import Repository
 from app.core.config import settings
+from app.core.archive import safe_extract_archive
+from app.core.crypto import decrypt_secret, encrypt_secret
+from app.core.network import validate_public_git_url
+from app.enums.role import UserRole
 
 
 MAX_UPLOAD_SIZE = 200 * 1024 * 1024  # 200MB
@@ -40,21 +42,10 @@ class RepositoryService:
         return files
 
     def _extract_archive(self, archive_path: Path, dest_dir: Path) -> None:
-        if archive_path.suffix == ".zip":
-            with zipfile.ZipFile(archive_path, "r") as zf:
-                zf.extractall(dest_dir)
-            return
-        if archive_path.suffix in (".gz", ".tgz") or archive_path.name.endswith(".tar.gz"):
-            with tarfile.open(archive_path, "r:gz") as tf:
-                tf.extractall(dest_dir)
-            return
-        if archive_path.suffix == ".tar":
-            with tarfile.open(archive_path, "r:") as tf:
-                tf.extractall(dest_dir)
-            return
-        raise ValueError("Unsupported archive format")
+        safe_extract_archive(archive_path, dest_dir)
 
     def _clone_repo(self, url: str, branch: str, token: str | None, dest_dir: Path) -> None:
+        validate_public_git_url(url)
         clone_url = url
         if token and url.startswith("https://"):
             clone_url = url.replace("https://", f"https://{token}@", 1)
@@ -84,16 +75,25 @@ class RepositoryService:
 
         raise subprocess.CalledProcessError(result.returncode, result.args, result.stderr)
 
-    async def list_repos(self, session: AsyncSession) -> list[Repository]:
-        result = await session.execute(select(Repository))
+    def _visible_query(self, user: dict):
+        if user.get("role") == UserRole.ADMIN.value:
+            return select(Repository)
+        return select(Repository).where(Repository.owner_user_id == str(user.get("id")))
+
+    async def list_repos(self, session: AsyncSession, user: dict) -> list[Repository]:
+        result = await session.execute(self._visible_query(user))
         return list(result.scalars().all())
 
-    async def create(self, session: AsyncSession, data: dict) -> Repository:
+    async def create(self, session: AsyncSession, data: dict, user: dict) -> Repository:
+        url = data.get("url")
+        if url:
+            validate_public_git_url(url)
         repo = Repository(
             name=data.get("name"),
             provider=data.get("provider"),
-            url=data.get("url"),
-            access_token=(data.get("token") or None),
+            url=url,
+            access_token=encrypt_secret(data.get("token") or None),
+            owner_user_id=str(user.get("id")),
             status=data.get("status") or "CONNECTED",
         )
         session.add(repo)
@@ -101,23 +101,30 @@ class RepositoryService:
         await session.refresh(repo)
         return repo
 
-    async def get(self, session: AsyncSession, repo_id: int) -> Repository:
+    async def get(self, session: AsyncSession, repo_id: int, user: dict | None = None) -> Repository:
         repo = await session.get(Repository, repo_id)
         if not repo:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+        if user and user.get("role") != UserRole.ADMIN.value and repo.owner_user_id != str(user.get("id")):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
         return repo
 
-    async def delete(self, session: AsyncSession, repo_id: int) -> None:
-        repo = await self.get(session, repo_id)
+    async def delete(self, session: AsyncSession, repo_id: int, user: dict) -> None:
+        repo = await self.get(session, repo_id, user)
         await session.delete(repo)
         await session.commit()
 
-    async def branches(self, session: AsyncSession, repo_id: int) -> list[str]:
-        repo = await self.get(session, repo_id)
+    async def branches(self, session: AsyncSession, repo_id: int, user: dict) -> list[str]:
+        repo = await self.get(session, repo_id, user)
         if repo.url:
             try:
+                validate_public_git_url(repo.url)
+                branch_url = repo.url
+                token = decrypt_secret(repo.access_token)
+                if token and branch_url.startswith("https://"):
+                    branch_url = branch_url.replace("https://", f"https://{token}@", 1)
                 result = subprocess.run(
-                    ["git", "ls-remote", "--heads", repo.url],
+                    ["git", "ls-remote", "--heads", branch_url],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
                     env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
                 )
@@ -132,8 +139,8 @@ class RepositoryService:
                 pass
         return ["main", "master", "develop"]
 
-    async def list_files(self, session: AsyncSession, repo_id: int, branch: str) -> list[str]:
-        repo = await self.get(session, repo_id)
+    async def list_files(self, session: AsyncSession, repo_id: int, branch: str, user: dict) -> list[str]:
+        repo = await self.get(session, repo_id, user)
         temp_root = None
         try:
             temp_root = Path(tempfile.mkdtemp(prefix="vulcan-repo-list-"))
@@ -149,7 +156,7 @@ class RepositoryService:
                 archive_path = max(archives, key=lambda p: p.stat().st_mtime)
                 self._extract_archive(archive_path, repo_root)
             elif repo.url:
-                self._clone_repo(repo.url, branch, repo.access_token, repo_root)
+                self._clone_repo(repo.url, branch, decrypt_secret(repo.access_token), repo_root)
             else:
                 raise HTTPException(status_code=400, detail="Repository URL is missing")
 

@@ -9,8 +9,6 @@ import logging
 from typing import Dict, Any, Optional
 from pathlib import Path
 import shutil
-import tarfile
-import zipfile
 import subprocess
 from dataclasses import asdict
 
@@ -23,6 +21,9 @@ from app.db.mongo import to_object_id
 from app.core.config import settings
 from app.core.trace import trace_step
 from app.domain.analysis.dynamic_probe import DynamicProbe
+from app.core.archive import safe_extract_archive
+from app.core.crypto import decrypt_secret
+from app.core.network import validate_public_git_url, validate_public_http_url
 
 logger = logging.getLogger(__name__)
 
@@ -375,22 +376,11 @@ class ScanService:
 
     # Extracts a ZIP or TAR archive to the destination directory
     def _extract_archive(self, archive_path: Path, dest_dir: Path) -> None:
-        if archive_path.suffix == ".zip":
-            with zipfile.ZipFile(archive_path, "r") as zf:
-                zf.extractall(dest_dir)
-            return
-        if archive_path.suffix in (".gz", ".tgz") or archive_path.name.endswith(".tar.gz"):
-            with tarfile.open(archive_path, "r:gz") as tf:
-                tf.extractall(dest_dir)
-            return
-        if archive_path.suffix == ".tar":
-            with tarfile.open(archive_path, "r:") as tf:
-                tf.extractall(dest_dir)
-            return
-        raise ValueError("Unsupported archive format")
+        safe_extract_archive(archive_path, dest_dir)
 
     # Git-clones a repository at the requested branch, falling back to main or master on failure
     def _clone_repo(self, url: str, branch: str, token: Optional[str], dest_dir: Path) -> None:
+        validate_public_git_url(url)
         clone_url = url
         if token and url.startswith("https://"):
             clone_url = url.replace("https://", f"https://{token}@", 1)
@@ -732,11 +722,12 @@ class ScanService:
                     [f"[INFO] Scanning {rel_path}..."],
                 )
 
-            # ASVS dynamic-probe controls (V12.1.1, V12.2.1, V12.2.2, V3.4.1, V13.4.1) —
+            # ASVS dynamic-probe controls (V12.1.1, V12.2.1, V12.2.2, V3.4.1, V13.4.1, V13.4.6) —
             # opt-in: only runs when the user supplied a live deployment URL for this scan.
             dynamic_probe_findings: list[dict] = []
             if target_url:
                 try:
+                    validate_public_http_url(target_url, allow_http=True)
                     probe_results = await asyncio.wait_for(
                         DynamicProbe().probe(target_url),
                         timeout=25.0,
@@ -883,6 +874,35 @@ class ScanService:
             ["[INFO] Scan cancelled by user"],
         )
         return {"state": "CANCELLED"}
+
+    # Lists scans visible to the user: their own, or every scan for an admin
+    async def list_scans(self, user: dict) -> list[Dict[str, Any]]:
+        if user.get("role") == UserRole.ADMIN.value:
+            query = {}
+        else:
+            user_oid = to_object_id(user.get("id", ""))
+            values = [str(user.get("id"))]
+            if user_oid:
+                values.append(user_oid)
+            query = {"user_id": {"$in": values}}
+        cursor = self.db.scans.find(query).sort("created_at", -1)
+        scans = []
+        async for scan in cursor:
+            scans.append({
+                "scan_id": scan.get("scan_id"),
+                "user_id": str(scan.get("user_id")),
+                "state": scan.get("state", "UNKNOWN"),
+                "input_type": scan.get("input_type"),
+                "vulnerabilities_found": scan.get("vulnerabilities_found", 0),
+                "created_at": scan.get("created_at"),
+                "finished_at": scan.get("finished_at"),
+            })
+        return scans
+
+    # Deletes a scan document from MongoDB; returns False if it didn't exist
+    async def delete(self, scan_id: str) -> bool:
+        result = await self.db.scans.delete_one({"scan_id": scan_id})
+        return result.deleted_count > 0
 
     # Checks that the user owns the scan or has admin role
     async def ensure_access(self, scan_id: str, user: dict) -> bool:

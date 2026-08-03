@@ -29,7 +29,13 @@ async def ensure_indexes() -> None:
     await db.asvs_results.create_index([("scan_id", 1), ("control_id", 1)], unique=True)
 
     # Manual attestations — one current attestation per control, upserted on each submit
-    await db.attestations.create_index("control_id", unique=True)
+    try:
+        await db.attestations.drop_index("control_id_1")
+    except Exception:
+        pass
+    await db.attestations.create_index([("user_id", 1), ("control_id", 1)], unique=True)
+    await db.token_revocations.create_index("jti", unique=True)
+    await db.token_revocations.create_index("expires_at", expireAfterSeconds=0)
 
 
 async def seed_admin() -> None:
@@ -46,6 +52,10 @@ async def seed_admin() -> None:
     admin = await db.users.find_one({"email": settings.DEFAULT_ADMIN_EMAIL})
     if admin:
         return  # Admin already exists
+    if not settings.DEFAULT_ADMIN_PASSWORD:
+        return
+    if settings.ENV.lower() not in {"dev", "development", "local", "test"} and settings.DEFAULT_ADMIN_PASSWORD == "admin123!":
+        raise RuntimeError("Refusing to seed a default admin with a weak production password")
     
     now = datetime.utcnow()
     await db.users.insert_one(

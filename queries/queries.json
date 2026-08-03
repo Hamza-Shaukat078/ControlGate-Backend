@@ -172,7 +172,7 @@
       "execSync\\s*\\([^)]*(?:req\\.|request\\.)",
       "(?:cp\\.)?(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|fork)\\s*\\(\\s*(?!['\\\"`])(?:cmd|command|path|file|filename)\\b",
       "(?:cp\\.)?(?:exec|execSync)\\s*\\([^\\n]*(?:\\+\\s*(?:cmd|command|path)|(?:cmd|command|path)\\s*\\+)",
-      "(?:cp\\.)?(?:spawn|execFile)\\s*\\([^\\n]*\\[(?:[^\\]]*,)*\\s*(?:cmd|command|path)\\s*(?:,|\\])",
+      "(?:cp\\.)?(?:spawn|execFile)\\s*\\([^\\n]*\\[(?:[^\\],]*,)*\\s*(?:cmd|command|path)\\s*(?:,|\\])",
       "url\\.parse\\s*\\([^)]*req\\.url[^)]*\\)\\.query\\.[a-zA-Z_]\\w*[\\s\\S]{0,400}(?:cp\\.)?(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|fork)\\s*\\(",
       "spawn\\s*\\([^)]*(?:\\+[^)]*[a-zA-Z_]|(?<!['\\\"])\\b[a-zA-Z_]\\w*\\s*,)[^)]*shell\\s*:\\s*true",
       "execSync\\s*\\(\\s*(?!['\\\"`])(?!timeout\\b)(?!options\\b)[a-zA-Z_]\\w*\\s*[).]",
@@ -282,7 +282,6 @@
       "request.data"
     ],
     "sinks": [
-      "render_template_string",
       "Markup",
       "safe",
       "mark_safe",
@@ -325,7 +324,6 @@
       "make_response\\s*\\([^\\n]*(?:request\\.|req\\.|\\+\\s*(?:first_name|data)|json\\.dumps\\s*\\(\\s*data)",
       "res\\.send\\s*\\([^\\n]*(?:req\\.|request\\.|params\\.|body\\b|marked\\(|snarkdown|render\\(|processSync|invalidKeys)",
       "return\\s+(?:request\\.|req\\.|request\\.query|req\\.query)",
-      "render_template_string\\s*\\(\\s*(?:[^'\"\\s\\)])",
       "Markup\\s*\\([^)]*(?:f['\"]|request\\.|req\\.|\\+)",
       "res\\.write\\s*\\([^\\n]*(?:req\\.|request\\.|\\+\\s*[a-zA-Z_]|\\$\\{[^}]*(?:req|request|query|param|body))",
       "insertAdjacentHTML\\s*\\([^)]*(?:req\\.|request\\.|location\\.|[a-zA-Z_]\\w*)",
@@ -505,7 +503,8 @@
     ],
     "sanitizers": [
       "allowlist",
-      "urlparse"
+      "urlparse",
+      "allowed"
     ],
     "confidence": "medium",
     "regex_patterns": [
@@ -519,7 +518,7 @@
       "Page\\.navigate\\s*\\(\\s*\\{\\s*url\\s*:\\s*(?:tainted|url|target)",
       "(?:SecretClient|KeyClient|download_blob_from_url)\\s*\\([^)]*(?:full_url|url|unsafe_host|unsafe_path)",
       "request\\.(?:args|form|json|get_json)(?:\\.get)?\\s*\\(['\"](?:url|URL|callback|target|redirect|hook|endpoint|src|href)['\"]\\)[\\s\\S]{0,400}(?:requests?\\.(get|post)|urlopen|httpx\\.(?:get|post)|axios\\.(?:get|post)|fetch)\\s*\\(",
-      "(?![\\s\\S]{0,600}(?:ALLOWED\\w*\\.has|allowedHosts|allowlist|validateUrl))req\\.(?:query|body|params)\\.(?:url|URL|callback|target|redirect|hook|endpoint)[\\s\\S]{0,400}(?:axios\\.(?:get|post)|fetch\\s*\\(|http\\.(?:get|request)|https\\.(?:get|request))",
+      "req\\.(?:query|body|params)\\.(?:url|URL|callback|target|redirect|hook|endpoint)[\\s\\S]{0,400}(?:axios\\.(?:get|post)|fetch\\s*\\(|http\\.(?:get|request)|https\\.(?:get|request))",
       "urllib\\.request\\.urlopen\\s*\\([a-zA-Z_]",
       "httpx\\.(get|post)\\s*\\([a-zA-Z_][^)]*url[^)]*\\)",
       "axios\\.(get|post)\\s*\\([^)]*(?:req\\.|request\\.|\\burl\\b|webhook|callback)(?![^)]*(?:URL|urlparse|allowlist|allowedDomains|ALLOWED))",
@@ -808,66 +807,6 @@
       "V1.2.6"
     ]
   },
-  "XML_INJECTION": {
-    "rule_id": "XML_INJECTION",
-    "name": "XML External Entity (XXE)",
-    "owasp": "A05",
-    "cwe": "CWE-611",
-    "description": "Unsafe XML parsing with external entities enabled",
-    "severity": "critical",
-    "languages": [
-      "python",
-      "javascript",
-      "typescript"
-    ],
-    "sources": [
-      "request.data",
-      "request.body",
-      "request.args",
-      "request.form",
-      "request.get_data",
-      "req.body"
-    ],
-    "sinks": [
-      "xml.etree.ElementTree.parse",
-      "lxml.etree.parse",
-      "etree.fromstring",
-      "etree.parse",
-      "etree.XMLParser",
-      "XMLParser",
-      "xml2js.parseString",
-      "ElementTree.fromstring",
-      "ET.fromstring",
-      "minidom.parseString",
-      "minidom.parse",
-      "sax.parseString",
-      "sax.parse"
-    ],
-    "patterns": [
-      "DFG_FLOW"
-    ],
-    "sanitizers": [
-      "defusedxml",
-      "resolve_entities=False",
-      "defusedxml.ElementTree",
-      "defusedxml.minidom",
-      "defusedxml.sax"
-    ],
-    "regex_patterns": [
-      "etree\\.XMLParser\\s*\\(",
-      "etree\\.fromstring\\s*\\(",
-      "etree\\.parse\\s*\\(",
-      "lxml\\.etree\\.(?:parse|fromstring|XMLParser)\\s*\\(",
-      "xml\\.etree\\.ElementTree\\.(?:parse|fromstring|iterparse)\\s*\\(",
-      "xml\\.dom\\.minidom\\.(?:parse|parseString)\\s*\\(",
-      "xml\\.sax\\.(?:parse|parseString|make_parser)\\s*\\(",
-      "minidom\\.(?:parse|parseString)\\s*\\(",
-      "load_dtd\\s*=\\s*True",
-      "no_network\\s*=\\s*False",
-      "resolve_entities\\s*=\\s*True"
-    ],
-    "confidence": "high"
-  },
   "MASS_ASSIGNMENT": {
     "rule_id": "MASS_ASSIGNMENT",
     "name": "Mass Assignment",
@@ -963,42 +902,9 @@
     "regex_patterns": [
       "(?:password|token|secret|hash|hmac|signature|api_key)\\s*==\\s*\\w",
       "\\w\\s*==\\s*(?:self\\.)?(?:password|token|secret|hash|hmac|signature|api_key)\\b"
-    ]
-  },
-  "EVAL_CODE_INJECTION": {
-    "rule_id": "EVAL_CODE_INJECTION",
-    "name": "Code Injection via eval()",
-    "owasp": "A08",
-    "cwe": "CWE-95",
-    "description": "User input passed to eval() function",
-    "severity": "critical",
-    "languages": [
-      "python",
-      "javascript",
-      "typescript"
-    ],
-    "sources": [
-      "request.args",
-      "request.json",
-      "req.query",
-      "req.body",
-      "request.form"
-    ],
-    "sinks": [
-      "eval",
-      "Function"
-    ],
-    "patterns": [
-      "DFG_FLOW"
-    ],
-    "sanitizers": [],
-    "confidence": "high",
-    "regex_patterns": [
-      "(?<![a-zA-Z0-9_.])(?<!literal_)eval\\s*\\(",
-      "new\\s+Function\\s*\\("
     ],
     "asvs_controls": [
-      "V1.3.2"
+      "V11.2.4"
     ]
   },
   "TEMPLATE_INJECTION": {
@@ -1082,6 +988,9 @@
       "\\$where",
       "\\.find(?:One)?\\s*\\(\\{[^}]*\\$",
       "collection\\.(?:find|findOne|update|remove|deleteOne)\\s*\\([^)]*(?:req\\.|request\\.)"
+    ],
+    "asvs_controls": [
+      "V1.2.4"
     ]
   },
   "INSECURE_RANDOM": {
@@ -1217,7 +1126,7 @@
       "redirect\\s*\\([^)]*\\b(?:next|url|goto|dest|target|returnUrl)\\b(?![^)]*(?:is_safe_url|urlparse|validate))[^)]*\\)",
       "res\\.redirect\\s*\\(\\s*[^'\"\\s\\)][^)]*\\)(?![^)]*(?:is_safe_url|urlparse|validate))",
       "window\\.location(?:\\.href)?\\s*=\\s*[a-zA-Z_]\\w*",
-      "(?![\\.\\s\\S]{0,800}(?:urlparse|is_safe_url|validateRedirect|ALLOWED\\.has|allowlist))request\\.(?:args|form|get_json)(?:\\.get)?\\s*\\(['\"](?:next|url|redirect|return|returnUrl|goto|back|target)['\"]\\)[\\s\\S]{0,300}(?:redirect\\s*\\(|window\\.location|res\\.redirect)"
+      "request\\.(?:args|form|get_json)(?:\\.get)?\\s*\\(['\\\"](?:next|url|redirect|return|returnUrl|goto|back|target)['\\\"]\\)[\\s\\S]{0,300}(?:redirect\\s*\\(|window\\.location|res\\.redirect)"
     ],
     "asvs_controls": [
       "V3.7.2"
@@ -1337,7 +1246,8 @@
     "sanitizers": [
       "Buffer.alloc"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "note": "No static_code ASVS control covers buffer overflow. Nearest control is V1.4.1 (memory-safe string/buffer/pointer handling), detection_strategy=manual_attestation, and its own description marks it not applicable to memory-safe target languages (Python/JS/TS). Do not map."
   },
   "GRAPHQL_INJECTION": {
     "rule_id": "GRAPHQL_INJECTION",
@@ -1365,7 +1275,10 @@
     "sanitizers": [
       "validate_query"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "asvs_controls": [
+      "V1.2.4"
+    ]
   },
   "LOG_INJECTION": {
     "rule_id": "LOG_INJECTION",
@@ -1458,7 +1371,7 @@
     "name": "Insecure Cookie Configuration",
     "owasp": "A05",
     "cwe": "CWE-614",
-    "description": "Cookie set without the secure flag, or without the HttpOnly flag — either omission leaves the cookie exposed (to network interception or client-side script access)",
+    "description": "Cookie set without the Secure flag, leaving it exposed to interception over unencrypted connections",
     "severity": "medium",
     "languages": [
       "python",
@@ -1470,14 +1383,11 @@
     "patterns": [],
     "regex_patterns": [
       "set_cookie\\((?![^)]*secure\\s*=\\s*True)[^)]+\\)",
-      "set_cookie\\((?![^)]*httponly\\s*=\\s*True)[^)]+\\)",
       "res\\.cookie\\((?![^)]*(?:secure\\s*:\\s*true|secure\\s*=\\s*True))[^)]+\\)",
-      "res\\.cookie\\((?![^)]*httpOnly\\s*:\\s*true)[^)]+\\)",
       "Set-Cookie[\\\"']?\\s*:\\s*[\\\"'][^\\\"']*(?!.*Secure)[^\\\"']*[\\\"']"
     ],
     "sanitizers": [
-      "secure=True",
-      "httpOnly=True"
+      "secure=True"
     ],
     "confidence": "low",
     "asvs_controls": [
@@ -1531,7 +1441,7 @@
     "sanitizers": [],
     "confidence": "medium",
     "asvs_controls": [
-      "V12.2.1"
+      "V12.3.1"
     ]
   },
   "DISABLED_CERTIFICATE_VALIDATION": {
@@ -1558,7 +1468,6 @@
     "sanitizers": [],
     "confidence": "high",
     "asvs_controls": [
-      "V12.2.2",
       "V12.3.2"
     ]
   },
@@ -1567,7 +1476,7 @@
     "name": "Zip Slip Vulnerability",
     "owasp": "A01",
     "cwe": "CWE-22",
-    "description": "Zip extraction without path validation",
+    "description": "Archive extraction without path containment validation, allowing zip slip path traversal",
     "severity": "high",
     "languages": [
       "python",
@@ -1587,15 +1496,23 @@
       "DFG_FLOW"
     ],
     "sanitizers": [
+      "abspath",
+      "commonpath",
+      "realpath",
+      "resolve",
+      "safe_join",
+      "startswith",
       "validate_path"
     ],
     "confidence": "high",
     "regex_patterns": [
-      "(?:zipfile|tarfile)\\.(?:extract|extractall)\\s*\\(",
-      "\\.extractall\\s*\\("
+      "(?i)\\b(?:zipfile|tarfile)\\.(?:extract|extractall)\\s*\\(",
+      "(?i)\\.extractall\\s*\\(",
+      "(?i)\\b(?:os\\.path\\.join|path\\.join)\\s*\\([^\\n)]*(?:member\\.(?:filename|name)|entry\\.(?:filename|name)|file\\.(?:filename|name)|name)"
     ],
     "asvs_controls": [
-      "V5.2.3"
+      "V5.2.3",
+      "V5.3.3"
     ]
   },
   "REGEX_DOS": {
@@ -1663,7 +1580,10 @@
       "str\\s*\\(\\s*exception\\s*\\)"
     ],
     "sanitizers": [],
-    "confidence": "medium"
+    "confidence": "medium",
+    "asvs_controls": [
+      "V16.5.1"
+    ]
   },
   "MISSING_RATE_LIMITING": {
     "rule_id": "MISSING_RATE_LIMITING",
@@ -1769,7 +1689,8 @@
       "X-Frame-Options[\\\"']?\\s*[:,]\\s*[\\\"']?ALLOWALL",
       "frame_options\\s*=\\s*[\\\"']?ALLOWALL",
       "XFrameOptionsMiddleware.{0,80}#.*disable"
-    ]
+    ],
+    "note": "Nearest controls are V3.4.6 and V3.4.3 (frame-ancestors/CSP header), both detection_strategy=config_inspection \u2014 verified by the config inspector module against a live/config-file response header, not by a source-code regex. Mapping here would be inert since asvs_service only reads rule.asvs_controls for static_code verdicts. Do not map."
   },
   "USE_OF_HARD_CODED_IV": {
     "rule_id": "USE_OF_HARD_CODED_IV",
@@ -1788,7 +1709,8 @@
     "patterns": [],
     "regex_patterns": [
       "iv\\s*=\\s*b?['\"][^'\"]+['\"]",
-      "initializationVector.*['\"][^'\"]+['\"]"
+      "initializationVector.*['\"][^'\"]+['\"]",
+      "nonce\\s*=\\s*b?['\"][^'\"]+['\"]"
     ],
     "sanitizers": [
       "os.urandom",
@@ -1796,7 +1718,8 @@
     ],
     "confidence": "medium",
     "asvs_controls": [
-      "V11.3.2"
+      "V11.3.2",
+      "V11.3.4"
     ]
   },
   "INSUFFICIENT_ENTROPY": {
@@ -1845,7 +1768,9 @@
     "description": "File checked then used without locking",
     "severity": "medium",
     "languages": [
-      "python"
+      "python",
+      "javascript",
+      "typescript"
     ],
     "sources": [],
     "sinks": [],
@@ -1860,7 +1785,12 @@
     "confidence": "low",
     "regex_patterns": [
       "os\\.path\\.exists\\([^)]*\\)[\\s\\S]{0,150}?open\\(",
-      "os\\.access\\([^)]*\\)[\\s\\S]{0,150}?open\\("
+      "os\\.access\\([^)]*\\)[\\s\\S]{0,150}?open\\(",
+      "os\\.path\\.exists\\s*\\([^)]*\\)\\s*:\\s*[\\s\\S]{0,150}?os\\.(?:remove|unlink)\\s*\\(",
+      "fs\\.existsSync\\s*\\([^)]*\\)\\s*\\)\\s*(?:\\{|&&)[\\s\\S]{0,150}?fs\\.(?:readFileSync|writeFileSync|unlinkSync|openSync)\\s*\\("
+    ],
+    "asvs_controls": [
+      "V15.4.2"
     ]
   },
   "VULNERABLE_COMPONENTS": {
@@ -1890,7 +1820,8 @@
       "(?i)(^|/)setup\\.cfg$",
       "(?i)(^|/)package\\.json$"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "note": "Nearest control is V15.2.1 (components within documented remediation time frames), detection_strategy=dependency_scan \u2014 verdict is taken directly from the dependency scanner's SLA evaluation (app/services/dependency_scanner.py), not from this rule catalog. Mapping here would be inert. Do not map."
   },
   "ADMIN_ROUTE_UNPROTECTED": {
     "rule_id": "ADMIN_ROUTE_UNPROTECTED",
@@ -1946,7 +1877,8 @@
       "(?i)(^|/)yarn\\.lock$",
       "(?i)(^|/)pnpm-lock\\.yaml$"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "note": "Nearest control is V15.2.4 (components sourced from the expected repository / dependency-confusion protection), detection_strategy=config_inspection, not static_code. Do not map."
   },
   "A06_NPM_REGISTRY_HTTP": {
     "rule_id": "A06_NPM_REGISTRY_HTTP",
@@ -1968,7 +1900,8 @@
     "file_patterns": [
       "(?i)(^|/)\\.npmrc$"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "note": "Nearest control is V15.2.4 (components sourced from the expected repository / dependency-confusion protection), detection_strategy=config_inspection, not static_code. Do not map."
   },
   "A06_PYTHON_VCS_DEP": {
     "rule_id": "A06_PYTHON_VCS_DEP",
@@ -1991,7 +1924,8 @@
       "(?i)(^|/)pipfile$",
       "(?i)(^|/)pyproject\\.toml$"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "note": "Nearest control is V15.2.4 (components sourced from the expected repository / dependency-confusion protection), detection_strategy=config_inspection, not static_code. Do not map."
   },
   "A06_PIPFILE_VCS": {
     "rule_id": "A06_PIPFILE_VCS",
@@ -2012,7 +1946,8 @@
     "file_patterns": [
       "(?i)(^|/)pipfile$"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "note": "Nearest control is V15.2.4 (components sourced from the expected repository / dependency-confusion protection), detection_strategy=config_inspection, not static_code. Do not map."
   },
   "DEFAULT_CREDENTIALS": {
     "rule_id": "DEFAULT_CREDENTIALS",
@@ -2065,7 +2000,10 @@
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx|sh|ps1)$"
     ],
-    "confidence": "high"
+    "confidence": "high",
+    "asvs_controls": [
+      "V1.3.2"
+    ]
   },
   "UNTRUSTED_BINARY_EXEC": {
     "rule_id": "UNTRUSTED_BINARY_EXEC",
@@ -2089,7 +2027,8 @@
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx|sh)$"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "note": "No static_code ASVS control targets unsigned/unverified binary execution. Nearest coverage (V15.1.5 'dangerous functionality' documentation, V15.2.4 dependency sourcing) is manual_attestation/config_inspection respectively. Do not map."
   },
   "LOGGING_DISABLED": {
     "rule_id": "LOGGING_DISABLED",
@@ -2114,7 +2053,8 @@
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx)$"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "note": "Nearest control is V16.1.1 (documented logging inventory), detection_strategy=manual_attestation. Every static_code-strategy logging control (V16.2.5, V16.3.1, V16.3.2, V16.3.4, V16.4.3) is already claimed by a more specific rule (SENSITIVE_LOGGING, AUTH_OPERATION_LOGGED_MARKER, AUTHZ_DENIAL_LOGGED_MARKER, HTTP_ERROR_HANDLER_SILENT, LOG_TRANSPORT_PLAINTEXT/CENTRALIZED_LOG_SHIPPING_MARKER). Do not map."
   },
   "SENSITIVE_LOGGING": {
     "rule_id": "SENSITIVE_LOGGING",
@@ -2138,7 +2078,10 @@
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx)$"
     ],
-    "confidence": "medium"
+    "confidence": "medium",
+    "asvs_controls": [
+      "V16.2.5"
+    ]
   },
   "EXCEPT_PASS_NO_LOG": {
     "rule_id": "EXCEPT_PASS_NO_LOG",
@@ -2192,7 +2135,10 @@
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx)$"
     ],
-    "confidence": "low"
+    "confidence": "low",
+    "asvs_controls": [
+      "V16.3.4"
+    ]
   },
   "AWS_METADATA_ACCESS": {
     "rule_id": "AWS_METADATA_ACCESS",
@@ -2215,7 +2161,10 @@
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx)$"
     ],
-    "confidence": "high"
+    "confidence": "high",
+    "asvs_controls": [
+      "V1.3.6"
+    ]
   },
   "GCP_METADATA_ACCESS": {
     "rule_id": "GCP_METADATA_ACCESS",
@@ -2238,7 +2187,10 @@
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx)$"
     ],
-    "confidence": "high"
+    "confidence": "high",
+    "asvs_controls": [
+      "V1.3.6"
+    ]
   },
   "AZURE_METADATA_ACCESS": {
     "rule_id": "AZURE_METADATA_ACCESS",
@@ -2261,7 +2213,10 @@
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx)$"
     ],
-    "confidence": "high"
+    "confidence": "high",
+    "asvs_controls": [
+      "V1.3.6"
+    ]
   },
   "IMDS_TOKENLESS": {
     "rule_id": "IMDS_TOKENLESS",
@@ -2284,7 +2239,10 @@
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx)$"
     ],
-    "confidence": "low"
+    "confidence": "low",
+    "asvs_controls": [
+      "V1.3.6"
+    ]
   },
   "UNSAFE_URL_PROTOCOL": {
     "name": "Unsafe URL Protocol / Unencoded Dynamic URL",
@@ -2395,8 +2353,8 @@
     "name": "XML Parser Without XXE Hardening",
     "owasp": "A05",
     "cwe": "CWE-611",
-    "description": "An XML parser (ElementTree, lxml, SAX) is used without disabling external entity resolution, risking XML External Entity (XXE) attacks.",
-    "severity": "high",
+    "description": "An XML parser (ElementTree, lxml, SAX, minidom) is used without disabling external entity resolution, or with external entities explicitly enabled, risking XML External Entity (XXE) attacks.",
+    "severity": "critical",
     "languages": [
       "python",
       "javascript",
@@ -2405,16 +2363,42 @@
     "asvs_controls": [
       "V1.5.1"
     ],
-    "sources": [],
-    "sinks": [],
-    "patterns": [],
+    "sources": [
+      "request.data",
+      "request.body",
+      "request.args",
+      "request.form",
+      "request.get_data",
+      "req.body"
+    ],
+    "sinks": [
+      "xml.etree.ElementTree.parse",
+      "lxml.etree.parse",
+      "etree.fromstring",
+      "etree.parse",
+      "etree.XMLParser",
+      "XMLParser",
+      "xml2js.parseString",
+      "ElementTree.fromstring",
+      "ET.fromstring",
+      "minidom.parseString",
+      "minidom.parse",
+      "sax.parseString",
+      "sax.parse"
+    ],
+    "patterns": [
+      "DFG_FLOW"
+    ],
     "sanitizers": [
       "defusedxml",
       "resolve_entities=False",
       "no_network=True",
-      "FEATURE_EXTERNAL_GENERAL_ENTITIES"
+      "FEATURE_EXTERNAL_GENERAL_ENTITIES",
+      "defusedxml.ElementTree",
+      "defusedxml.minidom",
+      "defusedxml.sax"
     ],
-    "confidence": "low",
+    "confidence": "high",
     "regex_patterns": [
       "import\\s+xml\\.etree\\.ElementTree",
       "lxml\\.etree\\.XMLParser\\(",
@@ -2424,7 +2408,17 @@
       "xml\\.dom\\.expatbuilder",
       "xmlrpc\\.client",
       "etree\\.parse\\(",
-      "etree\\.fromstring\\("
+      "etree\\.fromstring\\(",
+      "etree\\.XMLParser\\s*\\(",
+      "etree\\.fromstring\\s*\\(",
+      "etree\\.parse\\s*\\(",
+      "lxml\\.etree\\.(?:parse|fromstring|XMLParser)\\s*\\(",
+      "xml\\.etree\\.ElementTree\\.(?:parse|fromstring|iterparse)\\s*\\(",
+      "xml\\.dom\\.minidom\\.(?:parse|parseString)\\s*\\(",
+      "xml\\.sax\\.(?:parse|parseString|make_parser)\\s*\\(",
+      "minidom\\.(?:parse|parseString)\\s*\\(",
+      "load_dtd\\s*=\\s*True",
+      "no_network\\s*=\\s*False"
     ],
     "rule_id": "XXE_UNSAFE_XML_PARSER"
   },
@@ -3375,6 +3369,120 @@
       "V3.5.5"
     ]
   },
+  "JSONP_ENABLED": {
+    "rule_id": "JSONP_ENABLED",
+    "name": "JSONP Callback Response Enabled",
+    "owasp": "A05",
+    "cwe": "CWE-829",
+    "description": "The application wraps JSON data in a user-controlled callback parameter, enabling JSONP/XSSI style data exfiltration.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "res.json",
+      "jsonify",
+      "application/json"
+    ],
+    "confidence": "high",
+    "regex_patterns": [
+      "(?:callback|jsonp)\\s*=\\s*(?:request\\.(?:args|query|values)(?:\\.get\\([^)]*\\)|\\[[^\\]]*\\])|req\\.(?:query|body|params)\\.(?:callback|jsonp))",
+      "(?:res\\.send|response\\.write|return|Response\\s*\\()\\s*\\([^\\n]*(?:callback|jsonp)\\s*\\+\\s*['\\\"]?\\(",
+      "(?:res\\.jsonp|callback\\s*\\+\\s*['\\\"]\\(|jsonp\\s*\\+\\s*['\\\"]\\()",
+      "Content-Type['\\\"]?\\s*[:,=]\\s*['\\\"](?:application|text)/javascript['\\\"][\\s\\S]{0,300}(?:callback|jsonp)"
+    ],
+    "asvs_controls": [
+      "V3.5.6"
+    ]
+  },
+  "AUTH_DATA_IN_SCRIPT_RESPONSE": {
+    "rule_id": "AUTH_DATA_IN_SCRIPT_RESPONSE",
+    "name": "Authorization-Required Data in Script Response",
+    "owasp": "A05",
+    "cwe": "CWE-200",
+    "description": "Authenticated user/session/account data appears to be emitted in a JavaScript response, creating XSSI exposure risk.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "application/json",
+      "nosniff"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:Content-Type|contentType|headers)\\s*[^\\n]*(?:application|text)/javascript[\\s\\S]{0,400}(?:current_user|session|req\\.user|user\\.|account|profile|permissions|roles)",
+      "(?:res\\.type\\s*\\(\\s*['\\\"]js['\\\"]|res\\.set\\s*\\([^\\n]*(?:application|text)/javascript)[\\s\\S]{0,400}(?:res\\.send|return)[^\\n]*(?:req\\.user|currentUser|current_user|session|account|profile)",
+      "<script[^>]*>[^<]*(?:window\\.__USER__|window\\.__SESSION__|currentUser|authUser)\\s*="
+    ],
+    "asvs_controls": [
+      "V3.5.7"
+    ]
+  },
+  "SEC_FETCH_RESOURCE_GUARD_MARKER": {
+    "rule_id": "SEC_FETCH_RESOURCE_GUARD_MARKER",
+    "name": "Sec-Fetch Resource Embedding Guard Marker",
+    "owasp": "A05",
+    "cwe": "CWE-346",
+    "description": "Compliant marker for authenticated resource endpoints that validate Sec-Fetch-Site/Mode/Dest before serving embeddable content.",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:Sec-Fetch-Site|sec-fetch-site)[\\s\\S]{0,250}(?:same-origin|same-site|none)",
+      "(?:Sec-Fetch-Mode|sec-fetch-mode)[\\s\\S]{0,250}(?:navigate|cors|no-cors)",
+      "(?:Sec-Fetch-Dest|sec-fetch-dest)[\\s\\S]{0,250}(?:image|script|document|video|style)"
+    ],
+    "asvs_controls": [
+      "V3.5.8"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "EXTERNAL_ASSET_MISSING_SRI": {
+    "rule_id": "EXTERNAL_ASSET_MISSING_SRI",
+    "name": "Externally Hosted Asset Missing Subresource Integrity",
+    "owasp": "A08",
+    "cwe": "CWE-353",
+    "description": "An externally hosted script, stylesheet, or font asset is loaded without an integrity attribute.",
+    "severity": "medium",
+    "languages": [
+      "html",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "integrity="
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "<script\\b(?=[^>]*\\bsrc\\s*=\\s*['\\\"]https?://)(?![^>]*\\bintegrity\\s*=)[^>]*>",
+      "<link\\b(?=[^>]*\\bhref\\s*=\\s*['\\\"]https?://)(?=[^>]*\\brel\\s*=\\s*['\\\"](?:stylesheet|preload|modulepreload|preconnect)['\\\"])(?![^>]*\\bintegrity\\s*=)[^>]*>"
+    ],
+    "asvs_controls": [
+      "V3.6.1"
+    ]
+  },
   "DEPRECATED_CLIENT_TECH": {
     "rule_id": "DEPRECATED_CLIENT_TECH",
     "name": "Deprecated Client-Side Technology",
@@ -3451,7 +3559,7 @@
       "req\\.(?:header|get)\\s*\\(\\s*['\\\"](?:X-Forwarded-For|X-Real-IP|X-Client-IP|CF-Connecting-IP|True-Client-IP)['\\\"]",
       "HTTP_X_FORWARDED_FOR\\b",
       "['\\\"]X-Forwarded-For['\\\"]\\s*(?:\\]|,|\\))[^;\\n]{0,200}(?:allow|block|restrict|ban|whitelist|blacklist|rate|limit|check|if|==|!=|in\\s)",
-      "(?![\\s\\S]{0,300}(?:trust proxy|ProxyFix|trusted_proxies|TRUSTED_PROXIES))req\\.ip\\b[^;\\n]{0,200}(?:allow|block|restrict|ban|whitelist|blacklist|rate|limit|==|!=)"
+      "req\\.ip\\b[^;\\n]{0,200}(?:allow|block|restrict|ban|whitelist|blacklist|rate|limit|==|!=)"
     ],
     "asvs_controls": [
       "V4.1.3",
@@ -3779,7 +3887,8 @@
     ],
     "asvs_controls": [
       "V11.2.3",
-      "V11.6.1"
+      "V11.6.1",
+      "V11.6.2"
     ]
   },
   "XPATH_INJECTION": {
@@ -4477,9 +4586,9 @@
     ],
     "confidence": "medium",
     "regex_patterns": [
-      "(?![\\s\\S]{0,500}(?:check_nonce|validate_nonce|nonce\\s*(?:==|===)|nonce[^\\n]*(?:session|stored|expected)))(?:claims|payload)\\s*=\\s*jwt\\.decode\\s*\\(\\s*(?:id_token|idToken)",
-      "(?![\\s\\S]{0,500}(?:check_nonce|validate_nonce|nonce\\s*(?:==|===)|nonce[^\\n]*(?:session|stored|expected)))jwt\\.verify\\s*\\(\\s*(?:id_token|idToken)",
-      "(?![\\s\\S]{0,500}(?:check_nonce|validate_nonce|nonce\\s*(?:==|===)|nonce[^\\n]*(?:session|stored|expected)))verifyIdToken\\s*\\(\\s*(?:idToken|id_token)"
+      "(?:claims|payload)\\s*=\\s*jwt\\.decode\\s*\\(\\s*(?:id_token|idToken)",
+      "jwt\\.verify\\s*\\(\\s*(?:id_token|idToken)",
+      "verifyIdToken\\s*\\(\\s*(?:idToken|id_token)"
     ],
     "asvs_controls": [
       "V10.5.1"
@@ -4785,13 +4894,15 @@
       "check_issuer",
       "validate_issuer",
       "iss ==",
-      "expected_issuer"
+      "expected_issuer",
+      "\"iss\"]",
+      "'iss']"
     ],
     "confidence": "medium",
     "regex_patterns": [
-      "(?![\\s\\S]{0,500}(?:check_issuer|validate_issuer|claims\\[[\"']iss[\"']\\]\\s*(?:==|===)|payload\\[[\"']iss[\"']\\]\\s*(?:==|===)|\\.iss\\s*(?:==|===)))(?:claims|payload)\\s*=\\s*jwt\\.decode\\s*\\(\\s*(?:id_token|idToken)",
-      "(?![\\s\\S]{0,500}(?:check_issuer|validate_issuer|\\.iss\\s*(?:==|===)))jwt\\.verify\\s*\\(\\s*(?:id_token|idToken)",
-      "(?![\\s\\S]{0,500}(?:check_issuer|validate_issuer|\\.iss\\s*(?:==|===)))verifyIdToken\\s*\\(\\s*(?:idToken|id_token)"
+      "(?:claims|payload)\\s*=\\s*jwt\\.decode\\s*\\(\\s*(?:id_token|idToken)",
+      "jwt\\.verify\\s*\\(\\s*(?:id_token|idToken)",
+      "verifyIdToken\\s*\\(\\s*(?:idToken|id_token)"
     ],
     "asvs_controls": [
       "V10.2.2"
@@ -4854,7 +4965,8 @@
     ],
     "asvs_controls": [
       "V10.3.4",
-      "V6.8.4"
+      "V6.8.4",
+      "V7.5.3"
     ]
   },
   "OAUTH_AUTHZ_MISSING_PKCE": {
@@ -4995,11 +5107,13 @@
     "sanitizers": [
       "audience=",
       "audience:",
-      "CLIENT_ID"
+      "CLIENT_ID",
+      "aud ==",
+      "aud==="
     ],
     "confidence": "medium",
     "regex_patterns": [
-      "(?![\\s\\S]{0,400}(?:audience\\s*=|audience\\s*:|\\.aud\\s*(?:==|===)|CLIENT_ID))(?:claims|payload)\\s*=\\s*jwt\\.decode\\s*\\(\\s*(?:id_token|idToken)",
+      "(?:claims|payload)\\s*=\\s*jwt\\.decode\\s*\\(\\s*(?:id_token|idToken)",
       "jwt\\.verify\\s*\\(\\s*(?:id_token|idToken)(?![\\s\\S]{0,200}(?:audience|CLIENT_ID))",
       "verifyIdToken\\s*\\(\\s*(?:idToken|id_token)(?![\\s\\S]{0,200}(?:audience|clientId|CLIENT_ID))"
     ],
@@ -5716,5 +5830,843 @@
     "asvs_controls": [
       "V8.4.1"
     ]
+  },
+  "CSV_FORMULA_INJECTION": {
+    "rule_id": "CSV_FORMULA_INJECTION",
+    "name": "CSV/Spreadsheet Formula Injection",
+    "owasp": "A03",
+    "cwe": "CWE-1236",
+    "description": "User-controlled data flows into a CSV or spreadsheet (XLS/XLSX/ODF) export without escaping a leading formula-trigger character (=, +, -, @, tab, or null), allowing formula injection when the exported file is opened in a spreadsheet application.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [
+      "request.GET",
+      "request.POST",
+      "request.args",
+      "request.form",
+      "request.json",
+      "request.data",
+      "req.query",
+      "req.body",
+      "req.params",
+      "input",
+      "data"
+    ],
+    "sinks": [
+      "csv.writer",
+      "writerow",
+      "worksheet.write",
+      "to_csv",
+      "to_excel"
+    ],
+    "patterns": [
+      "DFG_FLOW",
+      "TAINT_FLOW"
+    ],
+    "sanitizers": [
+      "escape_csv",
+      "sanitize_csv",
+      "csv_escape",
+      "escape_formula",
+      "sanitize_formula",
+      "formula_injection"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "\\.writerow\\s*\\(\\s*\\[[^\\]]*(?<!escape_csv\\()(?<!sanitize_csv\\()(?<!csv_escape\\()(?<!escape_formula\\()(?<!sanitize_formula\\()(?:request\\.(?:form|args|json|data|values)|req\\.(?:body|query|params))[^\\]]*\\]",
+      "(?:worksheet|ws)\\.write\\s*\\([^)]*(?:request\\.(?:form|args|json|data)|req\\.(?:body|query|params))",
+      "(?:worksheet|ws)\\.cell\\s*\\([^)]*value\\s*=\\s*(?:request\\.(?:form|args|json|data)|req\\.(?:body|query|params))"
+    ],
+    "asvs_controls": [
+      "V1.2.10"
+    ]
+  },
+  "REDOS_VULNERABLE_REGEX": {
+    "rule_id": "REDOS_VULNERABLE_REGEX",
+    "name": "Regular Expression Vulnerable to Catastrophic Backtracking (ReDoS)",
+    "owasp": "A04",
+    "cwe": "CWE-1333",
+    "description": "A regular expression literal contains a nested quantifier (e.g. (a+)+, (\\w*)*) \u00e2\u20ac\u201d a classic exponential-backtracking shape that can cause a Regular expression Denial of Service (ReDoS) when matched against attacker-controlled input.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "re\\.(?:compile|match|search|fullmatch|sub|subn|findall|finditer)\\s*\\(\\s*r?[\"'][^\"']*\\([^()]*[+*][^()]*\\)[+*]",
+      "/[^/\\n\\\\]*\\([^()]*[+*][^()]*\\)[+*][^/\\n]*/",
+      "new\\s+RegExp\\s*\\(\\s*[\"'][^\"']*\\([^()]*[+*][^()]*\\)[+*]"
+    ],
+    "asvs_controls": [
+      "V1.3.12"
+    ]
+  },
+  "HUMAN_TIMING_ENFORCEMENT_MARKER": {
+    "rule_id": "HUMAN_TIMING_ENFORCEMENT_MARKER",
+    "name": "Human-Timing / Anti-Automation Marker",
+    "owasp": "A04",
+    "cwe": "CWE-799",
+    "description": "Informational marker for a mechanism enforcing realistic human timing on a business logic flow \u00e2\u20ac\u201d a minimum-elapsed-time check between form load and submission, or a CAPTCHA/challenge \u00e2\u20ac\u201d preventing excessively rapid, bot-speed transaction submissions (control V2.4.2).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:time\\.time\\s*\\(\\s*\\)|Date\\.now\\s*\\(\\s*\\))\\s*-\\s*\\w*(?:form_loaded_at|start_time|session_start|form_start|loaded_at)\\w*\\s*[<>]",
+      "MIN_(?:SUBMIT|SUBMISSION|FORM)_(?:TIME|DELAY|INTERVAL)",
+      "recaptcha\\.verify\\s*\\(|hcaptcha\\.verify\\s*\\(|verify_recaptcha\\s*\\(|grecaptcha\\.(?:execute|render)\\s*\\(",
+      "elapsed(?:_time)?\\s*[<>]\\s*(?:MIN_|min_)\\w+"
+    ],
+    "asvs_controls": [
+      "V2.4.2"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "MANUAL_TRANSFER_ENCODING_HEADER": {
+    "rule_id": "MANUAL_TRANSFER_ENCODING_HEADER",
+    "name": "Manually Set Transfer-Encoding Header",
+    "owasp": "A05",
+    "cwe": "CWE-444",
+    "description": "Application code manually sets the connection-specific Transfer-Encoding header, which can conflict with the framing the underlying HTTP library/proxy applies and enable request smuggling or response-splitting attacks.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "\\.set_header\\s*\\(\\s*['\"]Transfer-Encoding['\"]",
+      "headers\\s*\\[\\s*['\"]Transfer-Encoding['\"]\\s*\\]\\s*=",
+      "\\.setHeader\\s*\\(\\s*['\"]Transfer-Encoding['\"]",
+      "response\\.headers\\.add\\s*\\(\\s*['\"]Transfer-Encoding['\"]"
+    ],
+    "asvs_controls": [
+      "V4.2.3"
+    ]
+  },
+  "REQUEST_LENGTH_VALIDATION_MARKER": {
+    "rule_id": "REQUEST_LENGTH_VALIDATION_MARKER",
+    "name": "Outbound Request Length Validation Marker",
+    "owasp": "A04",
+    "cwe": "CWE-400",
+    "description": "Informational marker for a length check on a built URI or HTTP header (Authorization, Cookie) before it's sent, preventing an overly long outbound request from causing a denial of service against the receiving component (control V4.2.5).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?i)len\\s*\\(\\s*\\w*(?:url|uri)\\w*\\s*\\)\\s*[<>]\\s*max_\\w+",
+      "(?i)\\.length\\s*[<>]\\s*max_\\w*(?:url|uri|header|cookie)\\w*",
+      "(?i)max_(?:url|uri|header|cookie|request)_length"
+    ],
+    "asvs_controls": [
+      "V4.2.5"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "UPLOAD_QUOTA_PER_USER_MARKER": {
+    "rule_id": "UPLOAD_QUOTA_PER_USER_MARKER",
+    "name": "Upload Quota Per User Marker",
+    "owasp": "A04",
+    "cwe": "CWE-770",
+    "description": "Compliant marker for per-user upload quota or per-user file count limits near upload handling.",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "regex_patterns": [
+      "(?i)(?:@app\\.(?:route|post)|router\\.(?:post|put)|app\\.(?:post|put))[^\\n]*(?:upload|file)[\\s\\S]{0,350}(?:quota|storage_used|max_files_per_user|max_uploads_per_user|upload_quota|file_count|files_uploaded)",
+      "(?i)(?:current_user|request\\.user|req\\.user|user)\\.[a-zA-Z0-9_]*(?:storage|quota|file_count|upload_count|files_uploaded)[\\s\\S]{0,180}(?:>|>=|<|<=)[\\s\\S]{0,180}(?:quota|limit|max_[a-zA-Z0-9_]*|MAX_[A-Z0-9_]+)",
+      "(?i)(?:quota|upload_quota|max_files_per_user|max_uploads_per_user|storage_limit)[\\s\\S]{0,300}(?:request\\.files|req\\.files|upload|multer|FileField)"
+    ],
+    "sanitizers": [],
+    "confidence": "medium",
+    "asvs_controls": [
+      "V5.2.4"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "ARCHIVE_SYMLINK_EXTRACTION": {
+    "rule_id": "ARCHIVE_SYMLINK_EXTRACTION",
+    "name": "Archive Extraction Without Symlink Check",
+    "owasp": "A04",
+    "cwe": "CWE-59",
+    "description": "Compressed archive extraction without rejecting symlink entries or enforcing a symlink target allowlist.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [
+      "request.files",
+      "req.files"
+    ],
+    "sinks": [
+      "extractall",
+      "extract"
+    ],
+    "patterns": [],
+    "regex_patterns": [
+      "(?i)\\b(?:zipfile|tarfile)\\.[\\s\\S]{0,260}\\.extractall\\s*\\(",
+      "(?i)\\b(?:zip|tar|archive)\\.extractall\\s*\\(",
+      "(?i)\\bfor\\s+\\w+\\s+in\\s+[^\\n]*(?:namelist|getmembers)\\s*\\([^\\n]*\\)[\\s\\S]{0,450}\\.extract\\s*\\("
+    ],
+    "sanitizers": [
+      "issym",
+      "islnk",
+      "is_symlink",
+      "lstat",
+      "readlink",
+      "S_ISLNK",
+      "external_attr",
+      "symlink_allowlist",
+      "allowed_symlink_target"
+    ],
+    "confidence": "medium",
+    "asvs_controls": [
+      "V5.2.5"
+    ]
+  },
+  "UPLOAD_IMAGE_DIMENSION_LIMIT_MARKER": {
+    "rule_id": "UPLOAD_IMAGE_DIMENSION_LIMIT_MARKER",
+    "name": "Uploaded Image Dimension Limit Marker",
+    "owasp": "A04",
+    "cwe": "CWE-400",
+    "description": "Compliant marker for rejecting uploaded images that exceed maximum width, height, pixel count, or decoder pixel limits.",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "regex_patterns": [
+      "(?i)(?:Image\\.open|PIL\\.Image|sharp\\s*\\(|imageSize\\s*\\(|metadata\\s*\\()[\\s\\S]{0,350}(?:width|height|pixels)[\\s\\S]{0,180}(?:MAX_(?:IMAGE_)?(?:WIDTH|HEIGHT|PIXELS)|max_width|max_height|maxPixels|max_pixels)",
+      "(?i)(?:width|height|pixel_count|pixels|metadata\\.(?:width|height))[\\s\\S]{0,80}(?:>|>=)[\\s\\S]{0,100}(?:MAX_(?:IMAGE_)?(?:WIDTH|HEIGHT|PIXELS)|max_width|max_height|maxPixels|max_pixels)",
+      "(?i)Image\\.MAX_IMAGE_PIXELS\\s*="
+    ],
+    "sanitizers": [],
+    "confidence": "medium",
+    "asvs_controls": [
+      "V5.2.6"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "SUSPICIOUS_AUTH_NOTIFICATION_MARKER": {
+    "rule_id": "SUSPICIOUS_AUTH_NOTIFICATION_MARKER",
+    "name": "Suspicious Authentication Attempt Notification Marker",
+    "owasp": "A07",
+    "cwe": "CWE-778",
+    "description": "Informational marker for a notification/email call found near failed-login or login-anomaly-detection logic (control V6.3.5).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:failed[-_]?login|login[-_]?attempt|anomalous[-_]?login|impossible[-_]?travel|new[-_]?device[-_]?login|unusual[-_]?location)[^\\n]*[\\s\\S]{0,200}(?:send_(?:email|notification|alert)|notify_user|sendSecurityAlert|send_security_alert)\\s*\\(",
+      "(?:send_(?:email|notification|alert)|notify_user|sendSecurityAlert|send_security_alert)\\s*\\([\\s\\S]{0,200}(?:failed[-_]?login|login[-_]?attempt|anomalous[-_]?login|impossible[-_]?travel|new[-_]?device[-_]?login|unusual[-_]?location)",
+      "notify_suspicious_login\\s*\\(",
+      "sendSuspiciousLoginAlert\\s*\\("
+    ],
+    "asvs_controls": [
+      "V6.3.5"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "EMAIL_USED_AS_AUTH_FACTOR": {
+    "rule_id": "EMAIL_USED_AS_AUTH_FACTOR",
+    "name": "Email Address Used as Authentication Factor",
+    "owasp": "A07",
+    "cwe": "CWE-287",
+    "description": "The submitted password/credential value is compared directly against the user's email address, using email as a single-factor or MFA authentication mechanism.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "password\\s*==\\s*user\\.email",
+      "user\\.email\\s*==\\s*password",
+      "password\\s*===\\s*user\\.email",
+      "user\\.email\\s*===\\s*password",
+      "if\\s*\\(?\\s*(?:req\\.body\\.password|request\\.form\\.get\\(['\\\"]password['\\\"]\\)|password)\\s*===?\\s*(?:user\\.email|user\\[['\\\"]email['\\\"]\\])"
+    ],
+    "asvs_controls": [
+      "V6.3.6"
+    ]
+  },
+  "AUTH_DETAIL_CHANGE_NOTIFICATION_MARKER": {
+    "rule_id": "AUTH_DETAIL_CHANGE_NOTIFICATION_MARKER",
+    "name": "Authentication Detail Change Notification Marker",
+    "owasp": "A07",
+    "cwe": "CWE-620",
+    "description": "Informational marker for a notification call found inside a password-reset, credential-reset, or email/username-change handler (control V6.3.7).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:change[-_]?password|update[-_]?email|reset[-_]?password|changePassword|updateEmail|resetPassword|change[-_]?username|changeUsername)\\b[^\\n]*[\\s\\S]{0,200}(?:send_(?:email|notification)|notify_user|sendEmail|sendNotification)\\s*\\(",
+      "(?:send_(?:email|notification)|notify_user|sendEmail|sendNotification)\\s*\\([\\s\\S]{0,200}(?:change[-_]?password|update[-_]?email|reset[-_]?password|changePassword|updateEmail|resetPassword)",
+      "notify_credential_change\\s*\\(",
+      "sendAccountChangeNotification\\s*\\("
+    ],
+    "asvs_controls": [
+      "V6.3.7"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "USER_ENUMERATION_VIA_AUTH_ERRORS": {
+    "rule_id": "USER_ENUMERATION_VIA_AUTH_ERRORS",
+    "name": "User Enumeration via Distinct Authentication Error Messages",
+    "owasp": "A07",
+    "cwe": "CWE-203",
+    "description": "A single auth/registration/forgot-password handler returns a distinct error string for 'user not found' versus 'wrong password', allowing valid accounts to be deduced from error responses.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?i)(?:user\\s+not\\s+found|user_not_found|no\\s+account\\s+with\\s+that\\s+email|email\\s+not\\s+found)[\\s\\S]{0,300}(?:incorrect\\s+password|wrong\\s+password|invalid\\s+password|password\\s+is\\s+incorrect)",
+      "(?i)(?:incorrect\\s+password|wrong\\s+password|invalid\\s+password|password\\s+is\\s+incorrect)[\\s\\S]{0,300}(?:user\\s+not\\s+found|user_not_found|no\\s+account\\s+with\\s+that\\s+email|email\\s+not\\s+found)"
+    ],
+    "asvs_controls": [
+      "V6.3.8"
+    ]
+  },
+  "ADMIN_RESET_SETS_PASSWORD_DIRECTLY": {
+    "rule_id": "ADMIN_RESET_SETS_PASSWORD_DIRECTLY",
+    "name": "Admin Password Reset Sets Password Directly",
+    "owasp": "A07",
+    "cwe": "CWE-640",
+    "description": "An admin-facing password-reset endpoint accepts a direct new_password parameter instead of only triggering a reset-email/token flow, letting an administrator choose or see a user's resulting password.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.(?:route|post|put)\\s*\\(\\s*[\"'][^\"']*/admin/[^\"']*(?:reset|password)[^\"']*[\"'][\\s\\S]{0,300}new_password",
+      "(?:router|app)\\.(?:post|put)\\s*\\(\\s*[\"'][^\"']*/admin/[^\"']*(?:reset|password)[^\"']*[\"'][\\s\\S]{0,300}newPassword",
+      "def\\s+\\w*admin\\w*reset_password\\w*\\([^)]*new_password",
+      "admin_reset_password\\s*\\([^)]*new_password",
+      "adminResetPassword\\s*\\([^)]*newPassword"
+    ],
+    "asvs_controls": [
+      "V6.4.6"
+    ]
+  },
+  "AUTH_FACTOR_REVOCATION_ENDPOINT_MARKER": {
+    "rule_id": "AUTH_FACTOR_REVOCATION_ENDPOINT_MARKER",
+    "name": "Authentication Factor Revocation Endpoint Marker",
+    "owasp": "A07",
+    "cwe": "CWE-613",
+    "description": "Informational marker for an endpoint or function that revokes an authentication factor (device, authenticator, security key) on theft/loss (control V6.5.6).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.(?:route|delete|post)\\s*\\(\\s*[\"'][^\"']*(?:factors?|devices?|authenticators?|security[-_]?keys?)[^\"']*(?:revoke|remove)[^\"']*[\"']",
+      "(?:router|app)\\.(?:delete|post)\\s*\\(\\s*[\"'][^\"']*(?:factors?|devices?|authenticators?|security[-_]?keys?)[^\"']*(?:revoke|remove)[^\"']*[\"']",
+      "def\\s+\\w*(?:revoke|remove)_(?:auth_factor|device|authenticator|security_key)\\w*\\(",
+      "(?:revokeAuthFactor|removeDevice|revokeSecurityKey|revoke_auth_factor|revoke_device)\\s*\\("
+    ],
+    "asvs_controls": [
+      "V6.5.6"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "BIOMETRIC_AS_SOLE_FACTOR": {
+    "rule_id": "BIOMETRIC_AS_SOLE_FACTOR",
+    "name": "Biometric Authentication Used as Sole Factor",
+    "owasp": "A07",
+    "cwe": "CWE-308",
+    "description": "A biometric verification call is immediately followed by a login-success/session-grant with no other authentication factor (password/OTP/PIN) checked nearby.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:verify_biometric|biometric_verify|verifyBiometric|faceid_verify|touchid_verify|webauthn_verify_assertion)\\s*\\([^)\\n]*\\)(?![\\s\\S]{0,80}(?:password|otp|totp|second_factor|mfa|pin_code|verify_password))[\\s\\S]{0,80}(?:grant_access|login_success|create_session|issue_token|authenticate_user)\\s*\\("
+    ],
+    "asvs_controls": [
+      "V6.5.7"
+    ]
+  },
+  "TOTP_CLIENT_TIME_TRUSTED": {
+    "rule_id": "TOTP_CLIENT_TIME_TRUSTED",
+    "name": "TOTP Verified Against Client-Supplied Timestamp",
+    "owasp": "A07",
+    "cwe": "CWE-807",
+    "description": "TOTP verification uses a client-supplied timestamp parameter (for_time or equivalent) instead of a trusted server-side time source.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "\\.verify\\s*\\(\\s*[^,]+,\\s*for_time\\s*=\\s*(?:int\\s*\\(\\s*)?(?:request\\.(?:json|form|args)(?:\\.get)?\\([^)]*\\)|req\\.(?:body|query)\\.\\w+)",
+      "for_time\\s*=\\s*(?:int\\s*\\(\\s*)?(?:request\\.(?:json|form|args)|req\\.(?:body|query))",
+      "verifyTOTP\\s*\\([^)]*,\\s*(?:req\\.body\\.\\w*[Tt]ime\\w*|req\\.query\\.\\w*[Tt]ime\\w*)",
+      "totp[_a-zA-Z]*\\.verify\\s*\\([^)]*\\b(?:request\\.(?:json|form|args)|req\\.(?:body|query))\\b[^)]*timestamp"
+    ],
+    "asvs_controls": [
+      "V6.5.8"
+    ]
+  },
+  "PUSH_MFA_RATE_LIMITING_MARKER": {
+    "rule_id": "PUSH_MFA_RATE_LIMITING_MARKER",
+    "name": "Rate Limiting Marker Near Push-MFA Endpoint",
+    "owasp": "A07",
+    "cwe": "CWE-307",
+    "description": "Informational marker for a rate-limiting decorator/middleware found near a push-notification MFA endpoint (control V6.6.4).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "@(?:app|bp|router|\\w+)\\.(?:route|get|post)\\s*\\(\\s*[\"'][^\"']*(?:push[-_]?(?:mfa|auth|approve|challenge)|mfa[-_]?push|approve[-_]?login)[^\"']*[\"'][^\\n]*\\)[\\s\\S]{0,200}@(?:limiter\\.limit|rate_limit)\\s*\\(",
+      "@(?:limiter\\.limit|rate_limit)\\s*\\([^)]*\\)[\\s\\S]{0,200}@(?:app|bp|router|\\w+)\\.(?:route|get|post)\\s*\\(\\s*[\"'][^\"']*(?:push[-_]?(?:mfa|auth|approve|challenge)|mfa[-_]?push|approve[-_]?login)[^\"']*[\"']",
+      "(?:push[-_]?mfa|mfa[-_]?push|push[-_]?approve)[^\\n]*[\\s\\S]{0,150}(?:rateLimit\\s*\\(|express-rate-limit)",
+      "(?:rateLimit\\s*\\(|express-rate-limit)[\\s\\S]{0,150}(?:push[-_]?mfa|mfa[-_]?push|push[-_]?approve)"
+    ],
+    "asvs_controls": [
+      "V6.6.4"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "WEAK_CHALLENGE_NONCE": {
+    "rule_id": "WEAK_CHALLENGE_NONCE",
+    "name": "Weak or Undersized Challenge Nonce",
+    "owasp": "A07",
+    "cwe": "CWE-330",
+    "description": "A cryptographic challenge nonce is generated with fewer than 64 bits of entropy or via a non-CSPRNG/time-based source (small token_bytes/urandom, random.randint, uuid1).",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "challenge\\s*=\\s*secrets\\.token_bytes\\s*\\(\\s*[1-7]\\s*\\)",
+      "challenge\\s*=\\s*os\\.urandom\\s*\\(\\s*[1-7]\\s*\\)",
+      "challenge\\s*=\\s*random\\.randint\\s*\\(",
+      "challenge\\s*=\\s*uuid\\.uuid1\\s*\\(\\s*\\)",
+      "nonce\\s*=\\s*uuid\\.uuid1\\s*\\(\\s*\\)",
+      "challenge\\s*=\\s*crypto\\.randomBytes\\s*\\(\\s*[1-7]\\s*\\)",
+      "nonce\\s*=\\s*Math\\.random\\s*\\(\\s*\\)"
+    ],
+    "asvs_controls": [
+      "V6.7.2"
+    ]
+  },
+  "ADAPTIVE_AUTH_MARKER": {
+    "rule_id": "ADAPTIVE_AUTH_MARKER",
+    "name": "Adaptive/Risk-Based Authentication Marker",
+    "owasp": "A07",
+    "cwe": "CWE-307",
+    "description": "Informational marker for a risk-scoring/adaptive-auth library call or geoip-conditional logic found near login or session-check logic (control V8.2.4).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:def\\s+\\w*(?:login|authenticate|sign[-_]?in)\\w*|(?:login|authenticate|signIn)\\w*)\\s*\\([^\\n]*\\)[\\s\\S]{0,300}(?:risk_score|riskScore|risk_engine|riskEngine|adaptive_auth|adaptiveAuth|calculate_risk|assess_risk)\\s*\\(",
+      "(?:risk_score|riskScore|risk_engine|riskEngine|adaptive_auth|adaptiveAuth|calculate_risk|assess_risk)\\s*\\([\\s\\S]{0,300}(?:def\\s+\\w*(?:login|authenticate|sign[-_]?in)\\w*|(?:login|authenticate|signIn)\\w*)\\s*\\(",
+      "(?:def\\s+\\w*(?:login|authenticate|sign[-_]?in)\\w*|(?:login|authenticate|signIn)\\w*)\\s*\\([^\\n]*\\)[\\s\\S]{0,300}geoip2?\\.(?:lookup|database\\.Reader)\\s*\\(",
+      "adaptive_auth_policy\\s*\\(",
+      "contextual_risk_score\\s*\\(",
+      "step_up_if_risky\\s*\\("
+    ],
+    "asvs_controls": [
+      "V8.2.4"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "OAUTH_WILDCARD_SCOPE_REQUEST": {
+    "rule_id": "OAUTH_WILDCARD_SCOPE_REQUEST",
+    "name": "OAuth Client Requests Wildcard/Overbroad Scope",
+    "owasp": "A01",
+    "cwe": "CWE-863",
+    "description": "An OAuth authorization request asks for a wildcard or catch-all scope (scope=* or scope=all) instead of the specific, minimal set of scopes the client actually needs.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "scope[\"']?\\s*[=:]\\s*[\"']\\*[\"']",
+      "scope[\"']?\\s*[=:]\\s*[\"']all[\"']",
+      "[?&]scope=\\*(?:&|[\"']|$)",
+      "[?&]scope=all(?:&|[\"']|$)"
+    ],
+    "asvs_controls": [
+      "V10.2.3"
+    ]
+  },
+  "BEARER_TOKEN_NOT_SENDER_CONSTRAINED": {
+    "rule_id": "BEARER_TOKEN_NOT_SENDER_CONSTRAINED",
+    "name": "Bearer Access Token Accepted Without Sender Constraint",
+    "owasp": "A07",
+    "cwe": "CWE-346",
+    "description": "A resource server extracts and verifies a bearer access token without checking a DPoP proof or mTLS-bound (cnf claim) constraint, leaving it vulnerable to replay if the token is stolen.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "dpop",
+      "cnf",
+      "mtls",
+      "client_certificate"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "\\.split\\s*\\(\\s*[\"']Bearer\\s*[\"']\\s*\\)\\s*\\[1\\](?![\\s\\S]{0,300}(?:dpop|DPoP|cnf\\b|mtls|mTLS|client_certificate))[\\s\\S]{0,300}(?:jwt\\.decode|verify_token|introspect_token|verifyAccessToken)\\s*\\(",
+      "headers\\.get\\s*\\(\\s*[\"']Authorization[\"']\\s*\\)(?![\\s\\S]{0,300}(?:dpop|DPoP|cnf\\b|mtls|mTLS|client_certificate))[\\s\\S]{0,200}(?:jwt\\.decode|verify_token|introspect_token)\\s*\\("
+    ],
+    "asvs_controls": [
+      "V10.3.5"
+    ]
+  },
+  "MAC_THEN_ENCRYPT_PATTERN": {
+    "rule_id": "MAC_THEN_ENCRYPT_PATTERN",
+    "name": "MAC-then-Encrypt Instead of Encrypt-then-MAC",
+    "owasp": "A02",
+    "cwe": "CWE-353",
+    "description": "A MAC/HMAC is computed over the plaintext before a separate non-AEAD (CBC/CTR/CFB/OFB) encryption step, instead of computing the MAC over the ciphertext (encrypt-then-MAC), which can enable padding-oracle-style attacks.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "hmac\\.new\\s*\\([^)]*\\)(?:\\.(?:update|digest|hexdigest)\\s*\\([^)]*\\))?[\\s\\S]{0,250}AES\\.new\\s*\\([^)]*AES\\.MODE_(?:CBC|CTR|CFB|OFB)\\b",
+      "hmac\\.new\\s*\\([^)]*\\)(?:\\.(?:update|digest|hexdigest)\\s*\\([^)]*\\))?[\\s\\S]{0,250}modes\\.(?:CBC|CTR|CFB|OFB)\\s*\\(",
+      "createHmac\\s*\\([^)]*\\)[\\s\\S]{0,50}\\.update\\s*\\([^)]*\\)[\\s\\S]{0,250}createCipheriv\\s*\\(\\s*[\\\"'](?:aes-\\d+-(?:cbc|ctr|cfb|ofb))[\\\"']"
+    ],
+    "asvs_controls": [
+      "V11.3.5"
+    ]
+  },
+  "CRYPTO_VIA_ISOLATED_SECURITY_MODULE_MARKER": {
+    "rule_id": "CRYPTO_VIA_ISOLATED_SECURITY_MODULE_MARKER",
+    "name": "Cryptographic Operation Delegated to an Isolated Security Module",
+    "owasp": "A02",
+    "cwe": "CWE-320",
+    "description": "Informational marker for a cryptographic operation performed via an isolated security module (cloud KMS, HashiCorp Vault transit engine, or a PKCS#11-backed HSM) rather than in application-space key material (control V13.3.3).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "kms(?:_client)?\\.encrypt\\s*\\(",
+      "kms(?:_client)?\\.decrypt\\s*\\(",
+      "vault\\.write\\s*\\(\\s*[\"']transit/encrypt",
+      "vault\\.write\\s*\\(\\s*[\"']transit/decrypt",
+      "(?i)\\bPKCS#?11\\b",
+      "pkcs11\\.lib\\s*\\(",
+      "boto3\\.client\\s*\\(\\s*[\"']kms[\"']"
+    ],
+    "asvs_controls": [
+      "V13.3.3"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "UNMASKED_SENSITIVE_FIELD_IN_RESPONSE": {
+    "rule_id": "UNMASKED_SENSITIVE_FIELD_IN_RESPONSE",
+    "name": "Unmasked Sensitive Field Returned in API Response",
+    "owasp": "A01",
+    "cwe": "CWE-213",
+    "description": "A full, unmasked value of a highly sensitive field (card number, SSN, bank account) is serialized directly into an API response instead of a masked/truncated representation, extending the SENSITIVE_DATA_EXPOSURE/EXCESSIVE_DATA_EXPOSURE_BOPLA family to this specific over-disclosure shape (control V14.2.6).",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [
+      "jsonify",
+      "res.json",
+      "JSON.stringify"
+    ],
+    "patterns": [],
+    "sanitizers": [
+      "mask(",
+      "masked",
+      "last4",
+      "redact(",
+      "redacted",
+      "obfuscate(",
+      "****",
+      "truncate_card",
+      "toMasked"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:jsonify|res\\.json)\\s*\\(\\s*\\{[^}]{0,300}[\"']?(?:card_number|credit_card_number|full_card_number|ssn|social_security_number|account_number|bank_account_number|cvv)[\"']?\\s*[:=](?!\\s*[\"']?\\*)",
+      "res\\.json\\s*\\(\\s*\\w*\\.(?:card_number|ssn|social_security_number|account_number|cvv)\\b"
+    ],
+    "asvs_controls": [
+      "V14.2.6"
+    ]
+  },
+  "DATA_RETENTION_DELETION_JOB_MARKER": {
+    "rule_id": "DATA_RETENTION_DELETION_JOB_MARKER",
+    "name": "Data Retention Deletion Job Marker",
+    "owasp": "A01",
+    "cwe": "CWE-459",
+    "description": "Informational marker for a retention/TTL-based deletion job (scheduled purge, MongoDB TTL index, or a DELETE ... WHERE created_at < cutoff pattern) found in the codebase, weak evidence that stale sensitive data is removed on a schedule (control V14.2.7).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "expireAfterSeconds\\s*[:=]\\s*\\d+",
+      "@(?:cron|scheduler|periodic_task)\\s*\\([^)]*\\)[\\s\\S]{0,200}(?:delete|purge|remove)",
+      "(?:cron|schedule|scheduler)\\.[\\w.]*\\([^)]*\\)[\\s\\S]{0,200}(?:delete|purge)",
+      "DELETE\\s+FROM\\s+\\w+\\s+WHERE[^;]*(?:created_at|updated_at|expires_at)\\s*<",
+      "(?:retention_days|retention_period|data_retention)\\s*[:=]\\s*\\d+"
+    ],
+    "asvs_controls": [
+      "V14.2.7"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "UPLOAD_METADATA_NOT_STRIPPED": {
+    "rule_id": "UPLOAD_METADATA_NOT_STRIPPED",
+    "name": "Uploaded File Metadata Not Stripped",
+    "owasp": "A01",
+    "cwe": "CWE-200",
+    "description": "File-upload handling saves the uploaded file with no accompanying metadata-stripping call (EXIF/GPS/author data), risking exposure of sensitive metadata embedded in user-submitted files (control V14.2.8).",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "piexif.remove",
+      "exiftool",
+      "-all=",
+      "withmetadata(false)",
+      "strip_exif",
+      "remove_exif",
+      "stripmetadata",
+      "exif_delete"
+    ],
+    "confidence": "low",
+    "regex_patterns": [
+      "request\\.files\\[[^\\]]+\\]\\.save\\s*\\(",
+      "\\bfile\\.save\\s*\\(\\s*os\\.path\\.join",
+      "multer\\s*\\(",
+      "formidable\\s*\\(",
+      "req\\.files?\\b[^\\n;]{0,80}\\.(?:mv|save)\\s*\\("
+    ],
+    "asvs_controls": [
+      "V14.2.8"
+    ]
+  },
+  "LAST_RESORT_ERROR_HANDLER_MARKER": {
+    "rule_id": "LAST_RESORT_ERROR_HANDLER_MARKER",
+    "name": "Last-Resort Unhandled Exception Handler Marker",
+    "owasp": "A09",
+    "cwe": "CWE-248",
+    "description": "Informational marker for a top-level 'last resort' handler that catches all otherwise-unhandled exceptions (a global sys.excepthook/FastAPI exception_handler(Exception) in Python, or process.on('uncaughtException'/'unhandledRejection', ...)/a final 4-arg Express error middleware in Node), avoiding an unrecorded crash of the whole process (control V16.5.4).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "sys\\.excepthook\\s*=",
+      "@app\\.exception_handler\\s*\\(\\s*Exception\\s*\\)",
+      "process\\.on\\s*\\(\\s*[\"']uncaughtException[\"']",
+      "process\\.on\\s*\\(\\s*[\"']unhandledRejection[\"']",
+      "app\\.use\\s*\\([^)]*\\(\\s*err\\s*,\\s*req\\s*,\\s*res\\s*,\\s*next\\s*\\)"
+    ],
+    "asvs_controls": [
+      "V16.5.4"
+    ],
+    "finding_polarity": "compliant"
+  },
+  "SDP_FINGERPRINT_VERIFICATION_MARKER": {
+    "rule_id": "SDP_FINGERPRINT_VERIFICATION_MARKER",
+    "name": "DTLS Certificate vs SDP Fingerprint Verification Marker",
+    "owasp": "A07",
+    "cwe": "CWE-295",
+    "description": "Informational marker for SDP offer/answer handling that compares the DTLS certificate presented at handshake time against the fingerprint attribute exchanged in the SDP, evidence the stream would be rejected on a mismatch (control V17.2.8).",
+    "severity": "low",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "[\"']a=fingerprint[\"'][\\s\\S]{0,300}(?:===|==)\\s*\\w*(?:[Ff]ingerprint|[Cc]ert)",
+      "(?:remote|peer|sdp)[_A-Za-z]*[Ff]ingerprint\\s*(?:===|==)",
+      "getFingerprint\\s*\\(\\s*\\)\\s*(?:===|==)",
+      "dtls[_A-Za-z]*\\.(?:getFingerprint|fingerprint)\\b[\\s\\S]{0,150}(?:===|==)"
+    ],
+    "asvs_controls": [
+      "V17.2.8"
+    ],
+    "finding_polarity": "compliant"
   }
 }

@@ -163,6 +163,55 @@ class TestHstsHeaderCheck:
         assert finding.verdict == "not_tested"
 
 
+class TestCookieSizeCheck:
+    @pytest.mark.asyncio
+    async def test_cookie_under_4096_passes(self):
+        resp = _mock_response(200, {"set-cookie": "session=abc; Path=/; Secure"})
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=resp)):
+            finding = await DynamicProbe()._check_cookie_size("https://example.com")
+        assert finding.control_id == "V3.3.5"
+        assert finding.verdict == "pass"
+
+    @pytest.mark.asyncio
+    async def test_cookie_over_4096_fails(self):
+        resp = _mock_response(200, {"set-cookie": "session=" + ("a" * 4097) + "; Path=/"})
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=resp)):
+            finding = await DynamicProbe()._check_cookie_size("https://example.com")
+        assert finding.verdict == "fail"
+
+    @pytest.mark.asyncio
+    async def test_no_set_cookie_not_tested(self):
+        resp = _mock_response(200, {})
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=resp)):
+            finding = await DynamicProbe()._check_cookie_size("https://example.com")
+        assert finding.verdict == "not_tested"
+
+
+class TestHstsPreloadCheck:
+    @pytest.mark.asyncio
+    async def test_preloaded_domain_passes(self):
+        resp = _mock_response(200, {}, "")
+        resp.json.return_value = {"status": "preloaded"}
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=resp)):
+            finding = await DynamicProbe()._check_hsts_preload("example.com")
+        assert finding.control_id == "V3.7.4"
+        assert finding.verdict == "pass"
+
+    @pytest.mark.asyncio
+    async def test_unknown_domain_fails(self):
+        resp = _mock_response(200, {}, "")
+        resp.json.return_value = {"status": "unknown"}
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=resp)):
+            finding = await DynamicProbe()._check_hsts_preload("example.com")
+        assert finding.verdict == "fail"
+
+    @pytest.mark.asyncio
+    async def test_preload_api_error_not_tested(self):
+        with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=Exception("dns error"))):
+            finding = await DynamicProbe()._check_hsts_preload("example.com")
+        assert finding.verdict == "not_tested"
+
+
 class TestGitExposureCheck:
     @pytest.mark.asyncio
     async def test_exposed_git_head_fails(self):
@@ -195,17 +244,137 @@ class TestGitExposureCheck:
         assert finding.verdict == "pass"
 
 
+class TestVersionDisclosureCheck:
+    @pytest.mark.asyncio
+    async def test_versioned_server_header_fails(self):
+        resp = _mock_response(200, {"server": "nginx/1.18.0"})
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=resp)):
+            finding = await DynamicProbe()._check_version_disclosure("https://example.com")
+        assert finding.control_id == "V13.4.6"
+        assert finding.verdict == "fail"
+
+    @pytest.mark.asyncio
+    async def test_x_powered_by_header_fails(self):
+        resp = _mock_response(200, {"server": "nginx", "x-powered-by": "Express"})
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=resp)):
+            finding = await DynamicProbe()._check_version_disclosure("https://example.com")
+        assert finding.verdict == "fail"
+
+    @pytest.mark.asyncio
+    async def test_generic_server_header_passes(self):
+        resp = _mock_response(200, {"server": "nginx"})
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=resp)):
+            finding = await DynamicProbe()._check_version_disclosure("https://example.com")
+        assert finding.verdict == "pass"
+
+    @pytest.mark.asyncio
+    async def test_no_headers_passes(self):
+        resp = _mock_response(200, {})
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=resp)):
+            finding = await DynamicProbe()._check_version_disclosure("https://example.com")
+        assert finding.verdict == "pass"
+
+    @pytest.mark.asyncio
+    async def test_request_failure_not_tested(self):
+        with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=Exception("dns error"))):
+            finding = await DynamicProbe()._check_version_disclosure("https://example.com")
+        assert finding.verdict == "not_tested"
+
+
+class TestMtlsClientCertTrustCheck:
+    @pytest.mark.asyncio
+    async def test_no_cert_required_not_tested(self):
+        with patch.object(DynamicProbe, "_tls_handshake_ok", return_value=True):
+            finding = await DynamicProbe()._check_mtls_client_cert_trust("example.com", 443)
+        assert finding.control_id == "V12.1.3"
+        assert finding.verdict == "not_tested"
+
+    @pytest.mark.asyncio
+    async def test_baseline_unreachable_not_tested(self):
+        with patch.object(DynamicProbe, "_tls_handshake_ok", side_effect=OSError("timed out")):
+            finding = await DynamicProbe()._check_mtls_client_cert_trust("example.com", 443)
+        assert finding.verdict == "not_tested"
+
+    @pytest.mark.asyncio
+    async def test_cert_required_and_bogus_cert_rejected_passes(self):
+        def fake(host, port, cert_path, key_path):
+            if cert_path is None:
+                raise ssl.SSLError("certificate required")
+            raise ssl.SSLError("bad certificate")
+
+        with patch.object(DynamicProbe, "_tls_handshake_ok", side_effect=fake), \
+             patch.object(DynamicProbe, "_generate_throwaway_client_cert", return_value=(b"cert", b"key")):
+            finding = await DynamicProbe()._check_mtls_client_cert_trust("example.com", 443)
+        assert finding.verdict == "pass"
+
+    @pytest.mark.asyncio
+    async def test_cert_required_but_bogus_cert_accepted_fails(self):
+        def fake(host, port, cert_path, key_path):
+            if cert_path is None:
+                raise ssl.SSLError("certificate required")
+            return True
+
+        with patch.object(DynamicProbe, "_tls_handshake_ok", side_effect=fake), \
+             patch.object(DynamicProbe, "_generate_throwaway_client_cert", return_value=(b"cert", b"key")):
+            finding = await DynamicProbe()._check_mtls_client_cert_trust("example.com", 443)
+        assert finding.verdict == "fail"
+
+    @pytest.mark.asyncio
+    async def test_cert_generation_failure_not_tested(self):
+        def fake(host, port, cert_path, key_path):
+            if cert_path is None:
+                raise ssl.SSLError("certificate required")
+            return True
+
+        with patch.object(DynamicProbe, "_tls_handshake_ok", side_effect=fake), \
+             patch.object(DynamicProbe, "_generate_throwaway_client_cert", side_effect=RuntimeError("no crypto backend")):
+            finding = await DynamicProbe()._check_mtls_client_cert_trust("example.com", 443)
+        assert finding.verdict == "not_tested"
+
+
+class TestInternalTlsCertTrustCheck:
+    @pytest.mark.asyncio
+    async def test_trusted_cert_passes(self):
+        with patch.object(DynamicProbe, "_verify_trusted_cert", return_value=None):
+            finding = await DynamicProbe()._check_internal_tls_cert_trust("internal-svc.local", 8443)
+        assert finding.control_id == "V12.3.4"
+        assert finding.verdict == "pass"
+
+    @pytest.mark.asyncio
+    async def test_untrusted_cert_not_tested(self):
+        with patch.object(
+            DynamicProbe, "_verify_trusted_cert",
+            side_effect=ssl.SSLCertVerificationError("self-signed certificate"),
+        ):
+            finding = await DynamicProbe()._check_internal_tls_cert_trust("internal-svc.local", 8443)
+        assert finding.verdict == "not_tested"
+
+    @pytest.mark.asyncio
+    async def test_unreachable_host_not_tested(self):
+        with patch.object(DynamicProbe, "_verify_trusted_cert", side_effect=OSError("timed out")):
+            finding = await DynamicProbe()._check_internal_tls_cert_trust("internal-svc.local", 8443)
+        assert finding.verdict == "not_tested"
+
+
 class TestProbeOrchestration:
     @pytest.mark.asyncio
-    async def test_probe_aggregates_all_five_controls(self):
+    async def test_probe_aggregates_all_controls(self):
         probe = DynamicProbe()
         with patch.object(probe, "_check_tls_version", new=AsyncMock(return_value=_finding("V12.1.1"))), \
              patch.object(probe, "_check_cert_trust", new=AsyncMock(return_value=_finding("V12.2.2"))), \
              patch.object(probe, "_check_https_enforcement", new=AsyncMock(return_value=_finding("V12.2.1"))), \
+             patch.object(probe, "_check_cookie_size", new=AsyncMock(return_value=_finding("V3.3.5"))), \
              patch.object(probe, "_check_hsts_header", new=AsyncMock(return_value=_finding("V3.4.1"))), \
-             patch.object(probe, "_check_git_exposure", new=AsyncMock(return_value=_finding("V13.4.1"))):
+             patch.object(probe, "_check_hsts_preload", new=AsyncMock(return_value=_finding("V3.7.4"))), \
+             patch.object(probe, "_check_git_exposure", new=AsyncMock(return_value=_finding("V13.4.1"))), \
+             patch.object(probe, "_check_version_disclosure", new=AsyncMock(return_value=_finding("V13.4.6"))), \
+             patch.object(probe, "_check_mtls_client_cert_trust", new=AsyncMock(return_value=_finding("V12.1.3"))), \
+             patch.object(probe, "_check_internal_tls_cert_trust", new=AsyncMock(return_value=_finding("V12.3.4"))):
             findings = await probe.probe("https://example.com")
-        assert {f.control_id for f in findings} == {"V12.1.1", "V12.2.2", "V12.2.1", "V3.4.1", "V13.4.1"}
+        assert {f.control_id for f in findings} == {
+            "V12.1.1", "V12.2.2", "V12.2.1", "V3.3.5", "V3.4.1", "V3.7.4", "V13.4.1", "V13.4.6",
+            "V12.1.3", "V12.3.4",
+        }
 
     @pytest.mark.asyncio
     async def test_one_check_raising_does_not_break_the_others(self):
@@ -213,10 +382,18 @@ class TestProbeOrchestration:
         with patch.object(probe, "_check_tls_version", new=AsyncMock(side_effect=RuntimeError("boom"))), \
              patch.object(probe, "_check_cert_trust", new=AsyncMock(return_value=_finding("V12.2.2"))), \
              patch.object(probe, "_check_https_enforcement", new=AsyncMock(return_value=_finding("V12.2.1"))), \
+             patch.object(probe, "_check_cookie_size", new=AsyncMock(return_value=_finding("V3.3.5"))), \
              patch.object(probe, "_check_hsts_header", new=AsyncMock(return_value=_finding("V3.4.1"))), \
-             patch.object(probe, "_check_git_exposure", new=AsyncMock(return_value=_finding("V13.4.1"))):
+             patch.object(probe, "_check_hsts_preload", new=AsyncMock(return_value=_finding("V3.7.4"))), \
+             patch.object(probe, "_check_git_exposure", new=AsyncMock(return_value=_finding("V13.4.1"))), \
+             patch.object(probe, "_check_version_disclosure", new=AsyncMock(return_value=_finding("V13.4.6"))), \
+             patch.object(probe, "_check_mtls_client_cert_trust", new=AsyncMock(return_value=_finding("V12.1.3"))), \
+             patch.object(probe, "_check_internal_tls_cert_trust", new=AsyncMock(return_value=_finding("V12.3.4"))):
             findings = await probe.probe("https://example.com")
-        assert {f.control_id for f in findings} == {"V12.2.2", "V12.2.1", "V3.4.1", "V13.4.1"}
+        assert {f.control_id for f in findings} == {
+            "V12.2.2", "V12.2.1", "V3.3.5", "V3.4.1", "V3.7.4", "V13.4.1", "V13.4.6",
+            "V12.1.3", "V12.3.4",
+        }
 
 
 def _finding(control_id):

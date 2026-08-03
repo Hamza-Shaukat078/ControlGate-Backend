@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import logging
-import os
 
 from app.api.deps import get_current_user
 from semantic_engine.pipeline import get_pipeline, PipelineConfig
@@ -41,8 +40,22 @@ class VulnerabilityDetail(BaseModel):
     type: str
     severity: str
     confidence: float
-    owasp: str
-    cwe: Optional[str]
+    # A path-discovery finding whose source and sink don't share one owning rule
+    # (see PathDiscovery._attribute_rule) is genuinely unclassified — owasp/cwe
+    # are None rather than a fake guess, so both must accept that.
+    owasp: Optional[str] = None
+    cwe: Optional[str] = None
+    # Surfaces PathDiscovery's honest-unclassified findings instead of letting
+    # them silently drop out of the response (Pydantic ignores unrecognized
+    # dict keys by default, which is exactly how this flag would otherwise
+    # vanish here despite semantic_engine/pipeline.py setting it).
+    needs_manual_triage: bool = False
+    # Other rules _dedupe_vulnerabilities folded into this one finding (same
+    # location + sink, different rule_id — e.g. a dual-signal pair). This
+    # endpoint doesn't surface asvs_controls at all (no persisted scan_id for
+    # ASVSService to key off of), but the list of contributing rule types is
+    # still useful context, so it's kept rather than silently dropped.
+    contributing_rules: List[Dict[str, str]] = []
     location: Dict[str, Any]
     evidence: Dict[str, Any]
     analysis: Dict[str, Any]
@@ -135,7 +148,7 @@ async def scan_code(request: ScanRequest, user=Depends(get_current_user)):
 
 
 @router.post("/demo", response_model=ScanResponse)
-async def scan_demo():
+async def scan_demo(user=Depends(get_current_user)):
     """
     Demo endpoint with pre-loaded vulnerable code.
     
@@ -174,7 +187,7 @@ def search_products(category):
 
 
 @router.get("/health")
-async def scan_health():
+async def scan_health(user=Depends(get_current_user)):
     """
     Check scan service health.
     
@@ -194,7 +207,6 @@ async def scan_health():
                 "by_owasp": stats["by_owasp"]
             },
             "llm_enabled": get_pipeline().config.enable_llm,
-            "llm_key_set": bool(os.getenv("LLM_API_KEY"))
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")

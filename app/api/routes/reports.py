@@ -5,6 +5,7 @@ from app.api.deps import get_current_user
 from app.db.mongo import get_mongo_db
 from app.services.report_service import ReportService
 from app.services.asvs_service import ASVSService
+from app.core.permissions import can_access_resource
 from io import BytesIO
 import json
 
@@ -216,8 +217,13 @@ async def get_asvs_compliance(
     """
     if framework != "asvs":
         raise HTTPException(status_code=400, detail="Only framework=asvs is currently supported")
+    scan = await db.scans.find_one({"scan_id": scan_id})
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if not can_access_resource(user, str(scan.get("user_id"))):
+        raise HTTPException(status_code=403, detail="Not authorized to access this scan")
     service = ASVSService(db)
-    return await service.get_compliance_summary(scan_id)
+    return await service.get_compliance_summary(scan_id, user=user)
 
 
 @router.post("/compare")

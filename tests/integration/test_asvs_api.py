@@ -77,6 +77,12 @@ class FakeCollection:
             self.docs.append(new_doc)
         return MagicMock()
 
+    async def count_documents(self, query):
+        return len([
+            d for d in self.docs
+            if all(d.get(k) == v for k, v in (query or {}).items())
+        ])
+
 
 class FakeDB:
     def __init__(self, scans=None, attestations=None):
@@ -117,10 +123,11 @@ class TestComplianceRoute:
     @pytest.mark.asyncio
     async def test_compliance_summary_shape(self):
         db = FakeDB(scans=[{"scan_id": "scan-1", "summary": {
+            "user_id": "user-1",
             "scan_id": "scan-1", "vulnerabilities": [], "config_findings": [],
             "dependency_findings": [], "dependency_control_result": None,
             "dynamic_probe_findings": [],
-        }}])
+        }, "user_id": "user-1"}])
         result = await reports_routes.get_asvs_compliance("scan-1", framework="asvs", user=FAKE_USER, db=db)
         assert set(result.keys()) >= {"scan_id", "chapters", "levels", "results"}
         assert len(result["results"]) == 70
@@ -170,4 +177,4 @@ class TestAttestationRoutes:
         upload = UploadFile(filename="evidence.txt", file=BytesIO(b"hello world"))
         result = await attestations_routes.upload_evidence("V2.1.1", file=upload, user=FAKE_USER, db=FakeDB())
         assert result["evidence_url"].startswith("/attestations/V2.1.1/evidence/")
-        assert (tmp_path / "V2.1.1").exists()
+        assert (tmp_path / FAKE_USER["id"] / "V2.1.1").exists()

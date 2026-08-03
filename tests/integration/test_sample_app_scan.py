@@ -129,13 +129,23 @@ def clean_compliance():
 
 class TestVulnerableFixture:
     def test_produces_findings(self, vulnerable_compliance):
-        fails = [c for c, r in vulnerable_compliance["results"].items() if r["verdict"] == "fail"]
-        assert len(fails) >= 30, f"expected at least 30 failing controls, got {len(fails)}"
+        # This fixture is scanned with enable_llm=False, so every static hit
+        # here is by definition LLM-unconfirmed — _merge_static's documented
+        # policy (see asvs_service.py) downgrades those to "manual_review"
+        # rather than asserting an unverified "fail". Both verdicts mean the
+        # same thing for this test's purpose: the static pattern fired: only
+        # "pass"/"not_tested" would indicate a genuine detection miss.
+        flagged = [
+            c for c, r in vulnerable_compliance["results"].items()
+            if r["verdict"] in ("fail", "manual_review")
+        ]
+        assert len(flagged) >= 30, f"expected at least 30 flagged controls, got {len(flagged)}"
 
     def test_expected_controls_fail(self, vulnerable_compliance):
         for control_id in EXPECTED_FAIL_TO_PASS:
-            assert vulnerable_compliance["results"][control_id]["verdict"] == "fail", (
-                f"{control_id} expected to fail on the vulnerable fixture"
+            verdict = vulnerable_compliance["results"][control_id]["verdict"]
+            assert verdict in ("fail", "manual_review"), (
+                f"{control_id} expected to be flagged (fail or manual_review) on the vulnerable fixture, got {verdict}"
             )
 
     def test_dependency_control_fails(self, vulnerable_compliance):

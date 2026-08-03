@@ -13,6 +13,9 @@ and evaluates them against the config_inspection-primary ASVS controls:
   V3.4.4  X-Content-Type-Options: nosniff header (L2)
   V3.4.5  Referrer-Policy header (L2)
   V3.4.6  Content-Security-Policy frame-ancestors directive (L2)
+  V3.4.7  Content-Security-Policy violation reporting endpoint (L3)
+  V3.4.8  Cross-Origin-Opener-Policy header (L3)
+  V3.5.8  Cross-Origin-Resource-Policy header for embeddable resources (L3)
   V4.1.1  Content-Type header includes a charset
   V4.1.2  HTTP->HTTPS redirect scoped to user-facing endpoints, not API/service ones (L1)
   V13.2.2 Least-privilege IAM for backend/service-account access (L1)
@@ -24,9 +27,19 @@ and evaluates them against the config_inspection-primary ASVS controls:
   V13.2.5 Server-level allowlist restricting egress to external resources (L2)
   V13.4.3 Directory listing (autoindex) disabled (L2)
   V13.4.4 HTTP TRACE method not allowed (L2)
+  V4.1.4  Only explicitly supported HTTP methods allowed (limit_except allowlist) (L3)
   V14.3.2 Cache-Control: no-store on sensitive (auth/account/api) locations (L2)
   V17.1.1 TURN server restricts relay to non-internal IPs (L1)
   V17.2.2 Only approved DTLS-SRTP cipher suites enabled (L1)
+  V12.1.4 OCSP stapling enabled (ssl_stapling on) (L3)
+  V12.1.5 Encrypted Client Hello (ECH) enabled (L3, weak — emerging directive)
+  V12.3.5 Kubernetes/Istio PeerAuthentication enforces mTLS between services (L3)
+  V13.3.4 Secrets configured to expire/rotate (Terraform Secrets Manager rotation / Vault lease TTL) (L3)
+  V13.4.6 Backend component version info not exposed (server_tokens off) (L3, paired with a live header probe)
+  V13.4.7 Web tier only serves an explicit allowlist of file extensions (L3)
+  V14.2.5 Web Cache Deception — proxy_cache/fastcgi_cache on sensitive locations bypassed for authenticated requests (L3)
+  V15.2.4 Third-party/transitive dependencies sourced from the expected (private, pinned) registry (L3)
+  V17.1.2 TURN service resists resource exhaustion (min-port/max-port range + user-quota/total-quota) (L3, weak)
 
 nginx config is the primary source of truth for all of these (it's where these
 directives actually live in a real deployment); .env/YAML/Dockerfile provide
@@ -88,12 +101,24 @@ class ConfigInspector:
                     findings += self._inspect_terraform(path, content)
                 elif name.endswith(".json") and self._looks_like_iam_policy(content):
                     findings += self._inspect_iam_policy_json(path, content)
+                elif name.endswith(".json") and self._looks_like_secrets_manager_json(content):
+                    findings += self._inspect_secrets_manager_json(path, content)
                 elif self._looks_like_coturn(name, content):
                     findings += self._inspect_coturn(path, content)
                 elif self._looks_like_nginx(name, content):
                     findings += self._inspect_nginx(path, content)
             except Exception as exc:
                 logger.warning(f"Config inspector failed on {path}: {exc}")
+
+        # V15.2.4 — dependency-confusion registry pinning. Correlates package
+        # manifests against their registry-pin files (.npmrc / pip.conf), which
+        # commonly live in different files than the manifest itself, so this
+        # runs once over the whole repo rather than per-file like the checks above.
+        try:
+            findings += self._inspect_dependency_registry_pinning(file_map)
+        except Exception as exc:
+            logger.warning(f"Config inspector dependency-registry check failed: {exc}")
+
         return findings
 
     # ── File-type detection ──────────────────────────────────────────────────
@@ -122,6 +147,14 @@ class ConfigInspector:
         except (json.JSONDecodeError, ValueError):
             return False
         return isinstance(doc, dict) and isinstance(doc.get("Statement"), list)
+
+    @staticmethod
+    def _looks_like_secrets_manager_json(content: str) -> bool:
+        try:
+            doc = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return False
+        return isinstance(doc, dict) and "RotationEnabled" in doc
 
     # ── .env ──────────────────────────────────────────────────────────────────
 
@@ -229,6 +262,22 @@ class ConfigInspector:
                             f"Kubernetes {doc['kind']} rules are scoped (no wildcard verb/resource)",
                             confidence=0.4,
                         ))
+
+            # V12.3.5 — Istio PeerAuthentication enforcing mTLS between services.
+            # STRICT mode rejects plaintext traffic; PERMISSIVE/DISABLE accept it,
+            # so only STRICT counts as verified mutual authentication.
+            if doc.get("kind") == "PeerAuthentication":
+                spec = doc.get("spec") or {}
+                mode = ((spec.get("mtls") or {}).get("mode"))
+                if mode is not None:
+                    verdict = "pass" if mode == "STRICT" else "fail"
+                    findings.append(ConfigFinding(
+                        "V12.3.5", verdict, path, None,
+                        f"Istio PeerAuthentication mtls.mode is {mode} "
+                        f"({'enforces' if verdict == 'pass' else 'does not enforce'} strict mTLS)",
+                        confidence=0.6,
+                    ))
+                # else: PeerAuthentication with no mtls.mode set — not_tested (no finding)
         return findings
 
     @staticmethod
@@ -319,17 +368,81 @@ class ConfigInspector:
             ))
         return findings
 
+    def _inspect_secrets_manager_json(self, path: str, content: str) -> list[ConfigFinding]:
+        # V13.3.4 — AWS CLI `describe-secret` output (or an equivalent exported
+        # document) carries RotationEnabled/RotationRules directly, no HCL parsing
+        # needed for this shape.
+        try:
+            doc = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return []
+        enabled = doc.get("RotationEnabled")
+        if enabled is True:
+            rules = doc.get("RotationRules") or {}
+            days = rules.get("AutomaticallyAfterDays")
+            return [ConfigFinding(
+                "V13.3.4", "pass", path, None,
+                f"Secret has RotationEnabled=true" + (f" (every {days} days)" if days else ""),
+                confidence=0.6,
+            )]
+        if enabled is False:
+            return [ConfigFinding(
+                "V13.3.4", "fail", path, None,
+                "Secret has RotationEnabled=false — no rotation schedule configured",
+                confidence=0.55,
+            )]
+        return []
+
     _TF_WILDCARD_ACTION = re.compile(r'"?Action"?\s*[:=]\s*(?:"\*"|\[\s*"\*"\s*\])', re.IGNORECASE)
     _TF_WILDCARD_RESOURCE = re.compile(r'"?Resource"?\s*[:=]\s*(?:"\*"|\[\s*"\*"\s*\])', re.IGNORECASE)
     _TF_IAM_POLICY_RESOURCE = re.compile(
         r'resource\s+"aws_iam_(?:policy|role_policy|user_policy|group_policy)"', re.IGNORECASE
     )
 
+    _TF_SECRETSMANAGER_SECRET = re.compile(r'resource\s+"aws_secretsmanager_secret"\s+"', re.IGNORECASE)
+    _TF_SECRETSMANAGER_ROTATION = re.compile(
+        r'resource\s+"aws_secretsmanager_secret_rotation"[\s\S]*?rotation_rules\s*\{[^}]*automatically_after_days\s*=\s*(\d+)',
+        re.IGNORECASE,
+    )
+    _TF_VAULT_LEASE_TTL = re.compile(
+        r'resource\s+"vault_mount"\s+"[^"]*"\s*\{[^}]*(?:default_lease_ttl_seconds|max_lease_ttl_seconds)\s*=\s*(\d+)',
+        re.IGNORECASE,
+    )
+
+    def _inspect_secret_rotation_terraform(self, path: str, content: str) -> list[ConfigFinding]:
+        # V13.3.4 — secrets configured to expire/rotate. An aws_secretsmanager_secret
+        # with a matching _rotation resource (rotation_rules block), or a Vault mount
+        # with an explicit lease TTL, is evidence secrets don't live forever; a bare
+        # secret resource with neither is a real gap, not just missing evidence.
+        rotation_match = self._TF_SECRETSMANAGER_ROTATION.search(content)
+        vault_ttl_match = self._TF_VAULT_LEASE_TTL.search(content)
+        if rotation_match:
+            return [ConfigFinding(
+                "V13.3.4", "pass", path, _line_of(content, rotation_match),
+                f"aws_secretsmanager_secret_rotation configured (every {rotation_match.group(1)} days)",
+                confidence=0.6,
+            )]
+        if vault_ttl_match:
+            return [ConfigFinding(
+                "V13.3.4", "pass", path, _line_of(content, vault_ttl_match),
+                f"Vault mount configures a lease TTL of {vault_ttl_match.group(1)}s",
+                confidence=0.5,
+            )]
+        secret_match = self._TF_SECRETSMANAGER_SECRET.search(content)
+        if secret_match:
+            return [ConfigFinding(
+                "V13.3.4", "fail", path, _line_of(content, secret_match),
+                "aws_secretsmanager_secret defined with no matching "
+                "aws_secretsmanager_secret_rotation resource in the same file",
+                confidence=0.45,
+            )]
+        return []  # no secrets-manager/vault resource found — not_tested
+
     def _inspect_terraform(self, path: str, content: str) -> list[ConfigFinding]:
         # Terraform's HCL isn't JSON, but IAM policies embedded via jsonencode()
         # or heredoc still carry "Action"/"Resource" tokens in the raw text, so
         # the same wildcard check works as a plain-text scan.
-        findings = []
+        findings = self._inspect_secret_rotation_terraform(path, content)
         wildcard_matches = (
             list(self._TF_WILDCARD_ACTION.finditer(content))
             + list(self._TF_WILDCARD_RESOURCE.finditer(content))
@@ -392,6 +505,40 @@ class ConfigInspector:
                 confidence=0.5,
             ))
 
+        # V17.1.2 — TURN service resists resource exhaustion when legitimate
+        # users open many ports: a bounded relay port range (min-port/max-port)
+        # plus a per-user or total allocation quota. Weak/heuristic — presence
+        # of the directives is treated as evidence, not their specific values.
+        min_port = re.search(r"^\s*min-port\s*=\s*(\d+)", content, re.MULTILINE | re.IGNORECASE)
+        max_port = re.search(r"^\s*max-port\s*=\s*(\d+)", content, re.MULTILINE | re.IGNORECASE)
+        user_quota = re.search(r"^\s*user-quota\s*=\s*(\d+)", content, re.MULTILINE | re.IGNORECASE)
+        total_quota = re.search(r"^\s*total-quota\s*=\s*(\d+)", content, re.MULTILINE | re.IGNORECASE)
+        has_port_range = bool(min_port and max_port)
+        has_quota = bool(user_quota or total_quota)
+        if has_port_range and has_quota:
+            findings.append(ConfigFinding(
+                "V17.1.2", "pass", path, _line_of(content, min_port),
+                f"Bounded relay port range (min-port={min_port.group(1)}, max-port={max_port.group(1)}) "
+                "and an allocation quota (user-quota/total-quota) are both configured",
+                confidence=0.5,
+            ))
+        elif has_port_range or has_quota:
+            m = min_port or user_quota or total_quota
+            findings.append(ConfigFinding(
+                "V17.1.2", "pass", path, _line_of(content, m),
+                "Partial resource-exhaustion protection found: " +
+                ("bounded relay port range" if has_port_range else "allocation quota (user-quota/total-quota)") +
+                " configured, but not both",
+                confidence=0.3,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V17.1.2", "fail", path, None,
+                "No min-port/max-port relay range or user-quota/total-quota directive found — "
+                "coturn's default allows unbounded port allocation per user",
+                confidence=0.4,
+            ))
+
         # V17.2.2 — only approved DTLS-SRTP cipher suites. Only assessed when
         # cipher-list is actually set; coturn's OpenSSL-default suite varies by
         # build, so silence isn't itself evidence of a weak config.
@@ -415,6 +562,83 @@ class ConfigInspector:
                     confidence=0.6,
                 ))
         # else: no cipher-list directive — not_tested (no finding)
+
+        return findings
+
+    # ── package registry pinning (V15.2.4 — dependency confusion) ────────────
+
+    _SCOPED_PACKAGE = re.compile(r'"(@[\w.-]+/[\w.-]+)"\s*:\s*"')
+    _NPM_SCOPED_REGISTRY = re.compile(r'^\s*(@[\w.-]+):registry\s*=\s*(\S+)', re.MULTILINE)
+    _NPM_DEFAULT_REGISTRY = re.compile(r'^\s*registry\s*=\s*(\S+)', re.MULTILINE)
+    _PIP_INDEX_URL = re.compile(r'^\s*(?:index-url|extra-index-url)\s*=\s*(\S+)', re.MULTILINE | re.IGNORECASE)
+
+    def _inspect_dependency_registry_pinning(self, file_map: dict[str, str]) -> list[ConfigFinding]:
+        # Dependency confusion: an internal/private scoped package (@org/pkg) is
+        # resolvable from the public npm registry unless .npmrc explicitly pins
+        # that scope (or the registry as a whole) elsewhere. Same idea for pip
+        # via pip.conf's index-url. Manifest and pin file commonly live in
+        # different files, so this correlates across the whole repo rather than
+        # per-file like the checks in inspect() above.
+        findings: list[ConfigFinding] = []
+        package_json_entries: list[tuple[str, str]] = []
+        npmrc_content: Optional[str] = None
+        npmrc_path: Optional[str] = None
+        pip_conf_content: Optional[str] = None
+        pip_conf_path: Optional[str] = None
+
+        for path, content in file_map.items():
+            name = Path(path).name.lower()
+            if name == "package.json":
+                package_json_entries.append((path, content))
+            elif name == ".npmrc":
+                npmrc_content, npmrc_path = content, path
+            elif name in ("pip.conf", "pip.ini"):
+                pip_conf_content, pip_conf_path = content, path
+
+        for path, content in package_json_entries:
+            scopes = {m.split("/")[0] for m in self._SCOPED_PACKAGE.findall(content)}
+            if not scopes:
+                continue  # no scoped/private-looking packages declared — not_tested
+
+            if not npmrc_content:
+                findings.append(ConfigFinding(
+                    "V15.2.4", "fail", path, None,
+                    f"package.json declares scoped package(s) ({', '.join(sorted(scopes))}) but no "
+                    ".npmrc pins them to a private registry — resolvable from the public npm "
+                    "registry (dependency confusion risk)",
+                    confidence=0.4,
+                ))
+                continue
+
+            pinned_scopes = {m.group(1) for m in self._NPM_SCOPED_REGISTRY.finditer(npmrc_content)}
+            default_registry = self._NPM_DEFAULT_REGISTRY.search(npmrc_content)
+            pins_all = bool(default_registry) and "registry.npmjs.org" not in default_registry.group(1)
+            unpinned = scopes - pinned_scopes
+
+            if pins_all or not unpinned:
+                findings.append(ConfigFinding(
+                    "V15.2.4", "pass", npmrc_path, None,
+                    ".npmrc pins " + ("all packages" if pins_all else ", ".join(sorted(pinned_scopes))) +
+                    " to a private registry",
+                    confidence=0.5,
+                ))
+            else:
+                findings.append(ConfigFinding(
+                    "V15.2.4", "fail", path, None,
+                    f"package.json declares scoped package(s) ({', '.join(sorted(unpinned))}) with no "
+                    "matching registry pin in .npmrc — resolvable from the public npm registry "
+                    "(dependency confusion risk)",
+                    confidence=0.45,
+                ))
+
+        if pip_conf_content:
+            m = self._PIP_INDEX_URL.search(pip_conf_content)
+            if m and "pypi.org" not in m.group(1) and "files.pythonhosted.org" not in m.group(1):
+                findings.append(ConfigFinding(
+                    "V15.2.4", "pass", pip_conf_path, _line_of(pip_conf_content, m),
+                    f"pip index-url pinned to a private registry: {m.group(1)}",
+                    confidence=0.5,
+                ))
 
         return findings
 
@@ -546,6 +770,63 @@ class ConfigInspector:
                 confidence=0.5,
             ))
 
+        # V3.4.7 — CSP violation reporting endpoint
+        csp_report_match = re.search(
+            r"Content-Security-Policy[^\n]*(?:report-uri\s+\S+|report-to\s+[a-zA-Z0-9_-]+)",
+            content,
+            re.IGNORECASE,
+        )
+        if csp_report_match:
+            findings.append(ConfigFinding(
+                "V3.4.7", "pass", path, _line_of(content, csp_report_match),
+                "Content-Security-Policy includes a report-uri or report-to directive",
+                confidence=0.75,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V3.4.7", "fail", path, None,
+                "Content-Security-Policy does not include a report-uri or report-to directive",
+                confidence=0.5,
+            ))
+
+        # V3.4.8 — Cross-Origin-Opener-Policy
+        coop_match = re.search(
+            r"add_header\s+Cross-Origin-Opener-Policy\s+[\"']?(same-origin|same-origin-allow-popups)[\"']?",
+            content,
+            re.IGNORECASE,
+        )
+        if coop_match:
+            findings.append(ConfigFinding(
+                "V3.4.8", "pass", path, _line_of(content, coop_match),
+                f"Cross-Origin-Opener-Policy: {coop_match.group(1)} header directive found",
+                confidence=0.8,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V3.4.8", "fail", path, None,
+                "No Cross-Origin-Opener-Policy same-origin/same-origin-allow-popups header directive found",
+                confidence=0.55,
+            ))
+
+        # V3.5.8 — Cross-Origin-Resource-Policy for cross-origin embedding control
+        corp_match = re.search(
+            r"add_header\s+Cross-Origin-Resource-Policy\s+[\"']?(same-origin|same-site)[\"']?",
+            content,
+            re.IGNORECASE,
+        )
+        if corp_match:
+            findings.append(ConfigFinding(
+                "V3.5.8", "pass", path, _line_of(content, corp_match),
+                f"Cross-Origin-Resource-Policy: {corp_match.group(1)} header directive found",
+                confidence=0.75,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V3.5.8", "fail", path, None,
+                "No restrictive Cross-Origin-Resource-Policy header directive found",
+                confidence=0.5,
+            ))
+
         # V3.2.1 — CSP sandbox / Content-Disposition for served content
         csp_match = re.search(r"Content-Security-Policy[^\n]*", content, re.IGNORECASE)
         object_none_match = re.search(r"Content-Security-Policy[^\n]*object-src\s+['\"]?none['\"]?", content, re.IGNORECASE)
@@ -650,6 +931,28 @@ class ConfigInspector:
         # else: no explicit TRACE handling either way — nginx itself doesn't natively
         # proxy TRACE, so absence isn't proof of a problem; leave not_tested (no finding).
 
+        # V4.1.4 — only explicitly supported HTTP methods allowed, unused ones
+        # blocked. nginx passes through any method by default, so — unlike TRACE
+        # above, which nginx doesn't natively proxy — absence of an explicit
+        # allowlist here is real evidence of a gap, not just missing evidence.
+        limit_except_block = re.search(
+            r"limit_except\s+[^{]+\{[^}]*(?:deny\s+all|return\s+40[13])",
+            content, re.IGNORECASE | re.DOTALL,
+        )
+        if limit_except_block:
+            findings.append(ConfigFinding(
+                "V4.1.4", "pass", path, _line_of(content, limit_except_block),
+                "limit_except directive restricts requests to an explicit allowlist of HTTP methods",
+                confidence=0.6,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V4.1.4", "fail", path, None,
+                "No limit_except directive found — HTTP methods are not explicitly "
+                "restricted to an allowlist (nginx passes through any method by default)",
+                confidence=0.45,
+            ))
+
         # V12.1.2 — only recommended/strong TLS cipher suites enabled.
         # Only assessed when the directive is present; nginx build defaults vary
         # by version/distro, so silence isn't itself evidence of a weak config.
@@ -723,5 +1026,109 @@ class ConfigInspector:
                         "without Cache-Control: no-store", confidence=0.5,
                     ))
         # else: no location resembling a sensitive endpoint — not_tested (no finding emitted)
+
+        # V14.2.5 — Web Cache Deception: proxy_cache/fastcgi_cache on a sensitive
+        # location must not cache authenticated responses without a bypass guard
+        # keyed on the request's auth state — an app-level Cache-Control header
+        # alone (V14.3.2) doesn't stop a misconfigured upstream proxy cache from
+        # serving one user's cached sensitive response to another.
+        if sensitive_locations:
+            for m in sensitive_locations:
+                block_end = content.find("}", m.end())
+                block = content[m.end():block_end if block_end != -1 else m.end() + 400]
+                cache_directive = re.search(r"\b(?:proxy_cache|fastcgi_cache)\s+\S+;", block, re.IGNORECASE)
+                if not cache_directive:
+                    continue  # nothing proxy/fastcgi-cached here — no deception surface, not_tested
+                bypass_guard = re.search(
+                    r"(?:proxy_cache_bypass|proxy_no_cache|fastcgi_cache_bypass|fastcgi_no_cache)"
+                    r"\s+[^;]*\$(?:http_cookie|http_authorization|cookie_\w+)",
+                    block, re.IGNORECASE,
+                )
+                if bypass_guard:
+                    findings.append(ConfigFinding(
+                        "V14.2.5", "pass", path, _line_of(content, cache_directive),
+                        "Sensitive location caches via proxy_cache/fastcgi_cache but bypasses the "
+                        "cache for authenticated requests (cookie/auth-header guard found)",
+                        confidence=0.5,
+                    ))
+                else:
+                    findings.append(ConfigFinding(
+                        "V14.2.5", "fail", path, _line_of(content, cache_directive),
+                        "Sensitive location caches responses via proxy_cache/fastcgi_cache with no "
+                        "cookie/auth-header bypass guard — risk of Web Cache Deception serving "
+                        "cached sensitive content to other users",
+                        confidence=0.5,
+                    ))
+        # else: no location resembling a sensitive endpoint — not_tested (no finding emitted)
+
+        # V12.1.4 — OCSP stapling. nginx's default is off, so absence is real
+        # evidence of a gap, not just missing evidence (same reasoning as autoindex).
+        if re.search(r"ssl_stapling\s+on\s*;", content, re.IGNORECASE):
+            m = re.search(r"ssl_stapling\s+on\s*;", content, re.IGNORECASE)
+            findings.append(ConfigFinding(
+                "V12.1.4", "pass", path, _line_of(content, m),
+                "ssl_stapling on directive found (OCSP stapling enabled)", confidence=0.75,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V12.1.4", "fail", path, None,
+                "No ssl_stapling on directive found — nginx defaults to OCSP stapling disabled",
+                confidence=0.5,
+            ))
+
+        # V12.1.5 — Encrypted Client Hello (ECH). nginx ECH support is newer/limited
+        # and there's no single settled directive name, so this only ever produces a
+        # low-confidence pass when something resembling it is found; absence is not
+        # meaningful evidence either way given how rare ECH configs still are.
+        ech_match = re.search(
+            r"(?i)ssl_ech_config\s+\S+|ssl_ech_grease\s+on|encrypted[-_ ]client[-_ ]hello.{0,40}(?:on\b|enabled|true)",
+            content,
+        )
+        if ech_match:
+            findings.append(ConfigFinding(
+                "V12.1.5", "pass", path, _line_of(content, ech_match),
+                "Encrypted Client Hello (ECH) directive found", confidence=0.3,
+            ))
+        # else: no ECH directive found — not_tested (feature is emerging/rare, silence isn't evidence)
+
+        # V13.4.6 — backend version info not exposed. nginx's default is `server_tokens on`
+        # (version leaked in the Server header and default error pages), so absence of the
+        # `off` directive is a real gap.
+        if re.search(r"server_tokens\s+off\s*;", content, re.IGNORECASE):
+            m = re.search(r"server_tokens\s+off\s*;", content, re.IGNORECASE)
+            findings.append(ConfigFinding(
+                "V13.4.6", "pass", path, _line_of(content, m),
+                "server_tokens off directive found", confidence=0.7,
+            ))
+        else:
+            findings.append(ConfigFinding(
+                "V13.4.6", "fail", path, None,
+                "No server_tokens off directive found — nginx defaults to exposing its "
+                "version in the Server header and default error pages",
+                confidence=0.5,
+            ))
+
+        # V13.4.7 — web tier only serves an explicit allowlist of file extensions.
+        # Only assessed when the config actually serves static files (root/alias
+        # present); a location regex matching a specific extension alternation
+        # (e.g. \.(html|css|js|png)$) is the allowlist shape, vs a bare catch-all
+        # location with no extension restriction at all.
+        static_serving = re.search(r"^\s*(?:root|alias)\s+\S+;", content, re.IGNORECASE | re.MULTILINE)
+        if static_serving:
+            ext_allowlist = re.search(r"location\s+~\*?\s+\\\.\([\w|]+\)\$", content, re.IGNORECASE)
+            if ext_allowlist:
+                findings.append(ConfigFinding(
+                    "V13.4.7", "pass", path, _line_of(content, ext_allowlist),
+                    "Location block restricts serving to an explicit file-extension allowlist",
+                    confidence=0.5,
+                ))
+            else:
+                findings.append(ConfigFinding(
+                    "V13.4.7", "fail", path, _line_of(content, static_serving),
+                    "Static content served (root/alias) with no location block restricting "
+                    "which file extensions are served",
+                    confidence=0.45,
+                ))
+        # else: no static-file-serving location found — not_tested (no finding emitted)
 
         return findings

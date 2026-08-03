@@ -13,6 +13,7 @@ class Repository(Base):
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     url: Mapped[str] = mapped_column(String(512), nullable=True)
     access_token: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="CONNECTED")
     default_branch: Mapped[str] = mapped_column(String(128), default="main")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

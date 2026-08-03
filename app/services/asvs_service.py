@@ -37,6 +37,8 @@ from typing import Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from semantic_engine.query_store.loader import get_query_store
+from app.db.mongo import to_object_id
+from app.enums.role import UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,13 @@ _UNCONFIRMED_LLM_MARKERS = {
     "LLM unavailable — pattern-based detection only",
     "LLM cap reached — static analysis only",
 }
+
+# Controls whose catalog detection_strategy is not "static_code" but which
+# _compute_result nonetheless also accepts a static rule-catalog match for
+# (compliant-polarity finding tagged with this control_id in a rule's
+# asvs_controls). A rule mapped to one of these is NOT an inert mapping —
+# see _merge_config_or_compliant_static / _merge_config_or_dynamic below.
+HYBRID_STATIC_ELIGIBLE_CONTROLS = {"V3.5.8", "V13.4.6"}
 
 _VERDICT_HEX = {
     "pass": "#16a34a",
@@ -107,11 +116,24 @@ def _level_includes(control_level: str, target_level: str) -> bool:
     return _LEVEL_ORDER.get(control_level, 99) <= _LEVEL_ORDER.get(target_level, 0)
 
 
-def _not_tested(control_id: str, scan_id: Optional[str]) -> dict:
+def _not_tested(control_id: str, scan_id: Optional[str], reason: Optional[str] = None) -> dict:
     return {
         "control_id": control_id, "scan_id": scan_id, "verdict": "not_tested",
         "confidence": None, "evidence": [], "llm_explanation": None,
-        "reviewed_by": None, "reviewed_at": None,
+        "reviewed_by": None, "reviewed_at": None, "reason": reason,
+    }
+
+
+def _evidence_from_vuln(v: dict) -> dict:
+    """Evidence item for a static-code (taint-engine/rule-catalog) finding —
+    includes the actual code snippet, not just file:line, so a control's
+    pass/fail can be verified by reading the code that produced it instead of
+    just trusting the verdict."""
+    return {
+        "file": v.get("location", {}).get("file"),
+        "line": v.get("location", {}).get("start_line"),
+        "note": v.get("type"),
+        "code_snippet": (v.get("evidence") or {}).get("code_snippet"),
     }
 
 
@@ -159,12 +181,13 @@ class ASVSService:
 
     # ── Per-scan result computation ──────────────────────────────────────────
 
-    async def build_results_for_scan(self, scan_id: str) -> dict[str, dict]:
+    async def build_results_for_scan(self, scan_id: str, user: Optional[dict] = None) -> dict[str, dict]:
         scan = await self.db.scans.find_one({"scan_id": scan_id})
         summary = (scan or {}).get("summary") or {}
+        attestation_user_id = str((scan or {}).get("user_id") or (user or {}).get("id") or "")
 
         attestations = {
-            a["control_id"]: a async for a in self.db.attestations.find({})
+            a["control_id"]: a async for a in self.db.attestations.find({"user_id": attestation_user_id})
         }
 
         controls = await self.list_controls()
@@ -190,17 +213,108 @@ class ASVSService:
         if strategy == "static_code":
             return self._merge_static(control_id, summary, scan_id)
         if strategy == "config_inspection":
+            # V3.5.8 / V13.4.6: also accept a static rule-catalog match — see
+            # HYBRID_STATIC_ELIGIBLE_CONTROLS above.
+            if control_id == "V3.5.8":
+                return self._merge_config_or_compliant_static(control_id, summary, scan_id)
+            if control_id == "V13.4.6":
+                return self._merge_config_or_dynamic(control_id, summary, scan_id)
             return self._merge_config(control_id, summary, scan_id)
         if strategy == "dependency_scan":
             return self._merge_dependency(control_id, summary, scan_id)
         if strategy == "dynamic_probe":
             return self._merge_dynamic(control_id, summary, scan_id)
-        return _not_tested(control_id, scan_id)
+        return _not_tested(control_id, scan_id, reason="No detection strategy is configured for this control.")
+
+    def _merge_config_or_compliant_static(self, control_id: str, summary: dict, scan_id: str) -> dict:
+        static_matches = [
+            v for v in (summary.get("vulnerabilities") or [])
+            if control_id in (v.get("asvs_controls") or [])
+            and v.get("asvs_finding_polarity") == "compliant"
+        ]
+        config_findings = [
+            f for f in (summary.get("config_findings") or [])
+            if f.get("control_id") == control_id
+        ]
+
+        passing_config = [f for f in config_findings if f.get("verdict") == "pass"]
+        if passing_config or static_matches:
+            evidence = [
+                {"file": f.get("file"), "line": f.get("line"), "note": f.get("note")}
+                for f in passing_config
+            ] + [_evidence_from_vuln(v) for v in static_matches]
+            confidence_values = [f.get("confidence") or 0 for f in passing_config] + [v.get("confidence") or 0 for v in static_matches]
+            return {
+                "control_id": control_id, "scan_id": scan_id, "verdict": "pass",
+                "confidence": max(confidence_values, default=0.6), "evidence": evidence,
+                "llm_explanation": None, "reviewed_by": None, "reviewed_at": None, "reason": None,
+            }
+
+        failing_config = [f for f in config_findings if f.get("verdict") == "fail"]
+        if failing_config:
+            evidence = [{"file": f.get("file"), "line": f.get("line"), "note": f.get("note")} for f in failing_config]
+            return {
+                "control_id": control_id, "scan_id": scan_id, "verdict": "fail",
+                "confidence": max((f.get("confidence") or 0 for f in failing_config), default=0.5),
+                "evidence": evidence, "llm_explanation": None,
+                "reviewed_by": None, "reviewed_at": None, "reason": None,
+            }
+
+        return _not_tested(
+            control_id, scan_id,
+            reason="No config finding and no compliant static-code marker were found for this control.",
+        )
+
+    def _merge_config_or_dynamic(self, control_id: str, summary: dict, scan_id: str) -> dict:
+        # V13.4.6 has two independent sources of evidence: the static nginx
+        # server_tokens reading and a live Server/X-Powered-By header probe.
+        # Same fail-always-wins policy as the rest of this module.
+        config_findings = [
+            f for f in (summary.get("config_findings") or [])
+            if f.get("control_id") == control_id
+        ]
+        probe_findings = [
+            f for f in (summary.get("dynamic_probe_findings") or [])
+            if f.get("control_id") == control_id
+        ]
+
+        failing = [f for f in config_findings if f.get("verdict") == "fail"] + \
+            [f for f in probe_findings if f.get("verdict") == "fail"]
+        if failing:
+            evidence = [{"file": f.get("file"), "line": f.get("line"), "note": f.get("note")} for f in failing]
+            return {
+                "control_id": control_id, "scan_id": scan_id, "verdict": "fail",
+                "confidence": max((f.get("confidence") or 0 for f in failing), default=0.5),
+                "evidence": evidence, "llm_explanation": None,
+                "reviewed_by": None, "reviewed_at": None, "reason": None,
+            }
+
+        passing = [f for f in config_findings if f.get("verdict") == "pass"] + \
+            [f for f in probe_findings if f.get("verdict") == "pass"]
+        if passing:
+            evidence = [{"file": f.get("file"), "line": f.get("line"), "note": f.get("note")} for f in passing]
+            return {
+                "control_id": control_id, "scan_id": scan_id, "verdict": "pass",
+                "confidence": max((f.get("confidence") or 0 for f in passing), default=0.5),
+                "evidence": evidence, "llm_explanation": None,
+                "reviewed_by": None, "reviewed_at": None, "reason": None,
+            }
+
+        return _not_tested(
+            control_id, scan_id,
+            reason=(
+                "No config finding and no live dynamic-probe result were found for this "
+                "control — supply a target_url when starting the scan to enable the live check."
+            ),
+        )
 
     def _merge_attestation(self, control_id: str, attestations: dict, scan_id: str) -> dict:
         att = attestations.get(control_id)
         if not att:
-            return _not_tested(control_id, scan_id)
+            return _not_tested(
+                control_id, scan_id,
+                reason="No manual attestation has been submitted for this control yet.",
+            )
         return {
             "control_id": control_id, "scan_id": scan_id,
             "verdict": att.get("answer", "not_tested"),
@@ -209,6 +323,7 @@ class ASVSService:
             "llm_explanation": None,
             "reviewed_by": att.get("attested_by"),
             "reviewed_at": att.get("timestamp"),
+            "reason": None,
         }
 
     def _merge_static(self, control_id: str, summary: dict, scan_id: str) -> dict:
@@ -219,13 +334,15 @@ class ASVSService:
         # to the logic below, unchanged, for every other control or if it found nothing.
         for cap in summary.get("capability_findings") or []:
             if cap.get("control_id") == control_id:
+                cap_verdict = cap.get("verdict", "not_tested")
                 return {
                     "control_id": control_id, "scan_id": scan_id,
-                    "verdict": cap.get("verdict", "not_tested"),
+                    "verdict": cap_verdict,
                     "confidence": cap.get("confidence"),
                     "evidence": [{"file": cap.get("file"), "line": cap.get("line"), "note": cap.get("note")}] if cap.get("file") else [],
                     "llm_explanation": cap.get("note"),
                     "reviewed_by": None, "reviewed_at": None,
+                    "reason": cap.get("note") if cap_verdict == "not_tested" else None,
                 }
 
         vulns = summary.get("vulnerabilities") or []
@@ -245,14 +362,7 @@ class ASVSService:
                 decisive_hits = confirmed_hits or vulnerable_hits
                 verdict = "fail" if confirmed_hits else "manual_review"
                 worst = decisive_hits[0]
-                evidence = [
-                    {
-                        "file": v.get("location", {}).get("file"),
-                        "line": v.get("location", {}).get("start_line"),
-                        "note": v.get("type"),
-                    }
-                    for v in decisive_hits
-                ]
+                evidence = [_evidence_from_vuln(v) for v in decisive_hits]
                 explanation = _explanation(worst)
                 if verdict == "manual_review":
                     explanation = (
@@ -263,88 +373,129 @@ class ASVSService:
                     "control_id": control_id, "scan_id": scan_id, "verdict": verdict,
                     "confidence": worst.get("confidence"), "evidence": evidence,
                     "llm_explanation": explanation, "reviewed_by": None, "reviewed_at": None,
+                    "reason": None,
                 }
             # Only compliant-polarity (marker) findings matched -> positive evidence
             best = matches[0]
-            evidence = [
-                {"file": v.get("location", {}).get("file"), "line": v.get("location", {}).get("start_line"), "note": v.get("type")}
-                for v in matches
-            ]
+            evidence = [_evidence_from_vuln(v) for v in matches]
             return {
                 "control_id": control_id, "scan_id": scan_id, "verdict": "pass",
                 "confidence": best.get("confidence"), "evidence": evidence,
                 "llm_explanation": None, "reviewed_by": None, "reviewed_at": None,
+                "reason": None,
             }
 
         # No findings at all — distinguish "ran and found nothing" from "only a
         # weak marker rule exists for this control and it didn't fire".
         if not summary:
-            return _not_tested(control_id, scan_id)  # no scan has run yet
+            return _not_tested(
+                control_id, scan_id,
+                reason="This scan has not produced a results summary yet (still running, or failed before completing).",
+            )
         rules = self._rule_index().get(control_id, [])
         # No rule covers this control at all (e.g. it's exclusively handled by
         # CapabilityChecker and found no evidence either way) — nothing actually ran,
         # so this must stay not_tested rather than falling through to an unearned pass.
         if not rules or all(r.finding_polarity == "compliant" for r in rules):
-            return _not_tested(control_id, scan_id)
+            return _not_tested(
+                control_id, scan_id,
+                reason=(
+                    "This control is only covered by a weak presence-marker rule (or by no "
+                    "rule at all) — its absence in the scan isn't proof the control is "
+                    "satisfied, so it can't be confidently marked pass or fail."
+                ),
+            )
         return {
             "control_id": control_id, "scan_id": scan_id, "verdict": "pass",
             "confidence": 0.6, "evidence": [],
             "llm_explanation": "Static analysis ran across the scanned repository and found no violation of this control.",
-            "reviewed_by": None, "reviewed_at": None,
+            "reviewed_by": None, "reviewed_at": None, "reason": None,
         }
 
     def _merge_config(self, control_id: str, summary: dict, scan_id: str) -> dict:
         findings = [f for f in (summary.get("config_findings") or []) if f.get("control_id") == control_id]
         if not findings:
-            return _not_tested(control_id, scan_id)
+            return _not_tested(
+                control_id, scan_id,
+                reason=(
+                    "No configuration file relevant to this control (e.g. nginx.conf, "
+                    "docker-compose.yml, a CSP/security-headers config) was found in the "
+                    "scanned repository."
+                ),
+            )
 
         failing = [f for f in findings if f.get("verdict") == "fail"]
         chosen = failing or findings
         verdict = "fail" if failing else ("pass" if any(f.get("verdict") == "pass" for f in findings) else "not_tested")
         evidence = [{"file": f.get("file"), "line": f.get("line"), "note": f.get("note")} for f in chosen]
         confidence = max((f.get("confidence") or 0 for f in chosen), default=None)
+        reason = (
+            "Config findings were recorded for this control, but none had a definitive "
+            "pass or fail verdict."
+        ) if verdict == "not_tested" else None
         return {
             "control_id": control_id, "scan_id": scan_id, "verdict": verdict,
             "confidence": confidence, "evidence": evidence,
             "llm_explanation": None, "reviewed_by": None, "reviewed_at": None,
+            "reason": reason,
         }
 
     def _merge_dependency(self, control_id: str, summary: dict, scan_id: str) -> dict:
         if control_id != "V15.2.1":
-            return _not_tested(control_id, scan_id)
+            return _not_tested(
+                control_id, scan_id,
+                reason="Dependency-scan detection currently only evaluates control V15.2.1.",
+            )
         control_result = summary.get("dependency_control_result")
         if not control_result:
-            return _not_tested(control_id, scan_id)
+            return _not_tested(
+                control_id, scan_id,
+                reason=(
+                    "The dependency/SBOM scan did not produce a result for this scan — it may "
+                    "not have run, or no dependency manifest files (requirements.txt, "
+                    "package.json, etc.) could be found or parsed."
+                ),
+            )
 
         dep_findings = summary.get("dependency_findings") or []
         evidence = [
             {"note": f"{f['package']}@{f['version']} — {f['vuln_id']} ({f['severity']})"}
             for f in dep_findings[:20]
         ]
+        dep_verdict = control_result.get("verdict", "not_tested")
         return {
             "control_id": control_id, "scan_id": scan_id,
-            "verdict": control_result.get("verdict", "not_tested"),
+            "verdict": dep_verdict,
             "confidence": 0.75 if dep_findings else 0.9,
             "evidence": evidence,
             "llm_explanation": control_result.get("note"),
             "reviewed_by": None, "reviewed_at": None,
+            "reason": control_result.get("note") if dep_verdict == "not_tested" else None,
         }
 
     def _merge_dynamic(self, control_id: str, summary: dict, scan_id: str) -> dict:
         findings = [f for f in (summary.get("dynamic_probe_findings") or []) if f.get("control_id") == control_id]
         if not findings:
-            return _not_tested(control_id, scan_id)
+            return _not_tested(
+                control_id, scan_id,
+                reason=(
+                    "No live dynamic-probe result was recorded for this control — supply a "
+                    "target_url when starting the scan to enable live checks."
+                ),
+            )
         f = findings[0]
+        probe_verdict = f.get("verdict", "not_tested")
         return {
-            "control_id": control_id, "scan_id": scan_id, "verdict": f.get("verdict", "not_tested"),
+            "control_id": control_id, "scan_id": scan_id, "verdict": probe_verdict,
             "confidence": f.get("confidence"), "evidence": [{"note": f.get("note")}],
             "llm_explanation": None, "reviewed_by": None, "reviewed_at": None,
+            "reason": f.get("note") if probe_verdict == "not_tested" else None,
         }
 
     # ── Aggregation for the compliance summary ───────────────────────────────
 
-    async def get_compliance_summary(self, scan_id: str) -> dict:
-        results = await self.build_results_for_scan(scan_id)
+    async def get_compliance_summary(self, scan_id: str, user: Optional[dict] = None) -> dict:
+        results = await self.build_results_for_scan(scan_id, user=user)
         controls = await self.list_controls()
 
         by_chapter: dict[str, list[dict]] = defaultdict(list)
@@ -386,7 +537,7 @@ class ASVSService:
 
     # ── Portfolio dashboard (cross-repo aggregation) ─────────────────────────
 
-    async def get_portfolio_dashboard(self, trend_length: int = 8) -> dict:
+    async def get_portfolio_dashboard(self, trend_length: int = 8, user: Optional[dict] = None) -> dict:
         """
         Cross-repo compliance view: for every repo with at least one completed
         scan, its latest compliance snapshot plus a short history for a trend
@@ -398,10 +549,19 @@ class ASVSService:
         controls = await self.list_controls()
         controls_by_id = {c["control_id"]: c for c in controls}
         total_manual = sum(1 for c in controls if c["detection_strategy"] == "manual_attestation")
-        answered = await self.db.attestations.count_documents({})
+        attestation_query = {}
+        scan_query: dict[str, Any] = {"state": "COMPLETED"}
+        if user and user.get("role") != UserRole.ADMIN.value:
+            user_oid = to_object_id(user.get("id", ""))
+            values: list[Any] = [str(user.get("id"))]
+            if user_oid:
+                values.append(user_oid)
+            scan_query["user_id"] = {"$in": values}
+            attestation_query = {"user_id": user.get("id")}
+        answered = await self.db.attestations.count_documents(attestation_query)
 
         cursor = self.db.scans.find(
-            {"state": "COMPLETED"},
+            scan_query,
             {"scan_id": 1, "repo_id": 1, "created_at": 1, "finished_at": 1},
         ).sort("created_at", -1)
         scans = await cursor.to_list(length=None)
@@ -419,7 +579,7 @@ class ASVSService:
             trend = []
             latest_summary = None
             for s in trend_scans:
-                s_summary = await self.get_compliance_summary(s["scan_id"])
+                s_summary = await self.get_compliance_summary(s["scan_id"], user=user)
                 trend.append({
                     "scan_id": s["scan_id"],
                     "created_at": s.get("created_at"),
@@ -428,7 +588,7 @@ class ASVSService:
                 if s["scan_id"] == latest["scan_id"]:
                     latest_summary = s_summary
             if latest_summary is None:
-                latest_summary = await self.get_compliance_summary(latest["scan_id"])
+                latest_summary = await self.get_compliance_summary(latest["scan_id"], user=user)
 
             l1 = latest_summary["levels"]["L1"]
             fails = [r for r in latest_summary["results"].values() if r["verdict"] == "fail"]
@@ -566,12 +726,18 @@ class ASVSService:
 
     # ── PDF export ────────────────────────────────────────────────────────────
 
-    async def export_pdf(self, scan_id: str, repo_name: Optional[str] = None, branch: Optional[str] = None) -> Optional[bytes]:
+    async def export_pdf(
+        self,
+        scan_id: str,
+        repo_name: Optional[str] = None,
+        branch: Optional[str] = None,
+        user: Optional[dict] = None,
+    ) -> Optional[bytes]:
         if not REPORTLAB_AVAILABLE:
             logger.error("reportlab not available. Install it with: pip install reportlab")
             return None
 
-        summary = await self.get_compliance_summary(scan_id)
+        summary = await self.get_compliance_summary(scan_id, user=user)
         controls = await self.list_controls()
         controls_by_id = {c["control_id"]: c for c in controls}
         exec_summary_text = await self._generate_executive_summary(summary)

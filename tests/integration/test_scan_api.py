@@ -37,7 +37,7 @@ MOCK_PIPELINE_RESULT = MagicMock(
 
 
 class TestDirectScan:
-    URL = "/api/v1/scan/scan"
+    URL = "/api/v1/scan"
 
     def _post(self, client, code: str, language: str = "python", filename: str = "test.py"):
         return client.post(self.URL, json={
@@ -75,7 +75,10 @@ class TestDirectScan:
         r = client.post(self.URL, json={"code": "x = 1"})
         assert r.status_code == 422
 
-    def test_scan_response_has_scan_id(self, client):
+    def test_scan_response_reports_success(self, client):
+        # POST /api/v1/scan is the synchronous direct-code-scan endpoint — it
+        # returns results inline with no persisted job to poll, so (unlike
+        # /api/v1/scans/start) its ScanResponse schema has no scan_id field.
         with patch("semantic_engine.pipeline.get_pipeline") as mock_get:
             mock_pipeline = MagicMock()
             mock_pipeline.analyze_code = AsyncMock(return_value=MagicMock(
@@ -85,7 +88,7 @@ class TestDirectScan:
             mock_get.return_value = mock_pipeline
             r = self._post(client, "pass")
         assert r.status_code == 200
-        assert "scan_id" in r.json()
+        assert r.json().get("success") is True
 
     def test_scan_response_has_severity_breakdown(self, client):
         with patch("semantic_engine.pipeline.get_pipeline") as mock_get:
@@ -134,11 +137,11 @@ class TestScanStatus:
     def test_status_response_has_status_field(self, client, sample_scan):
         r = client.get(f"/api/v1/scans/{sample_scan['scan_id']}/status")
         assert r.status_code == 200
-        assert "status" in r.json()
+        assert "state" in r.json()
 
     def test_completed_scan_status_is_completed(self, client, sample_scan):
         r = client.get(f"/api/v1/scans/{sample_scan['scan_id']}/status")
-        assert r.json().get("status") == "COMPLETED"
+        assert r.json().get("state") == "COMPLETED"
 
 
 class TestScanList:

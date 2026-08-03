@@ -382,7 +382,15 @@ class CPGParser:
         - Builds parent/child relationships
         """
         node_type = ts_node.type
-        
+
+        # A bare `function` keyword token (leaf, no children) vs. a real
+        # function-expression node sharing the same type name — see the
+        # NOTE in _should_skip. Only the keyword-token form gets skipped here.
+        if node_type == "function" and ts_node.child_count <= 1:
+            for child in ts_node.children:
+                self._extract_cpg(child, parent_id, source_code, filename, nodes, edges, language)
+            return
+
         # Skip certain node types
         if self._should_skip(node_type):
             for child in ts_node.children:
@@ -410,7 +418,16 @@ class CPGParser:
                 edges.append(GraphEdge(from_node=parent_id, to_node=node_id, type=EdgeType.AST_CHILD))
 
         # FUNCTION DECLARATIONS
-        if node_type in ("function_declaration", "function_definition", "function_expression"):
+        #
+        # tree-sitter-javascript types a function *expression* (named or
+        # anonymous — e.g. `return function inner(y) {...}` or a callback
+        # literal passed as a call argument) as a bare "function" node, the
+        # same type name used for the `function` *keyword* token that's a
+        # leaf child of every function_declaration/function node. Guard on
+        # child_count to tell them apart: the keyword token has none, the
+        # real expression node has formal_parameters/statement_block children.
+        is_function_expression_node = node_type == "function" and ts_node.child_count > 1
+        if node_type in ("function_declaration", "function_definition", "function_expression") or is_function_expression_node:
             graph_node = self._extract_function(ts_node, node_id, source_code, filename, language)
             if graph_node:
                 nodes.append(graph_node)
@@ -1111,7 +1128,12 @@ class CPGParser:
             "program", "source_file",  # Root nodes
             "(", ")", "{", "}", "[", "]", ",", ";", ":",  # Punctuation
             "comment", "//", "/*", "*/",  # Comments
-            "function",  # Keyword token nodes in JS/TS
+            # NOTE: "function" is deliberately NOT here — tree-sitter-javascript
+            # uses that same type name for both the bare `function` keyword
+            # token (a leaf, safe to skip) and actual function *expression*
+            # nodes (e.g. `return function inner(y) {...}`, or a callback
+            # literal passed as a call argument), which must NOT be skipped.
+            # See the child_count guard in _extract_cpg where it's handled.
         }
         return node_type in skip_types
     

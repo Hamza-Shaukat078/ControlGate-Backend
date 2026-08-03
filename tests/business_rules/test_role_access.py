@@ -19,7 +19,7 @@ class TestUnauthenticatedAccess:
         ("GET",  "/api/v1/auth/me"),
         ("GET",  "/api/v1/repositories/"),
         ("GET",  "/api/v1/scans/"),
-        ("POST", "/api/v1/scan/scan"),
+        ("POST", "/api/v1/scan"),
         ("GET",  "/api/v1/dashboard/summary"),
         ("GET",  "/api/v1/notifications/"),
     ]
@@ -109,18 +109,18 @@ class TestRoleEscalationProtection:
         r = client.patch(f"/api/v1/admin/users/{uid}", json={"role": "admin"})
         assert r.status_code in (403, 404)
 
-    def test_normal_user_cannot_promote_other_user(self, client, mongo_db):
+    async def test_normal_user_cannot_promote_other_user(self, client, mongo_db):
         other = {
             "_id": ObjectId(),
             "email": "other@test.com",
             "role": "normal",
             "hashed_password": "x",
         }
-        mongo_db.users.insert_one(other)
+        await mongo_db.users.insert_one(other)
         r = client.patch(f"/api/v1/admin/users/{other['_id']}", json={"role": "admin"})
         assert r.status_code in (403, 404)
 
-    def test_jwt_role_claim_does_not_bypass_db_role_check(self, mongo_db):
+    async def test_jwt_role_claim_does_not_bypass_db_role_check(self, mongo_db):
         """A token with role=admin claim should not bypass server-side role check
         if the user document in DB has role=normal."""
         from app.core.security import create_access_token
@@ -137,7 +137,7 @@ class TestRoleEscalationProtection:
             "hashed_password": "x",
             "is_active": True,
         }
-        mongo_db.users.insert_one(normal_doc)
+        await mongo_db.users.insert_one(normal_doc)
 
         forged_token = create_access_token(uid, extra_claims={"role": "admin"})
 

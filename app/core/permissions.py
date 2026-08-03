@@ -117,8 +117,11 @@ async def check_scan_quota(user: dict, db) -> None:
     from app.db.mongo import to_object_id
     user_oid = to_object_id(user.get("id"))
 
+    user_values = [str(user.get("id"))]
+    if user_oid:
+        user_values.append(user_oid)
     count = await db.scans.count_documents({
-        "user_id":    user_oid,
+        "user_id":    {"$in": user_values},
         "created_at": {"$gte": midnight},
     })
 

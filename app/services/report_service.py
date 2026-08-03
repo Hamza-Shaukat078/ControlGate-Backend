@@ -33,7 +33,7 @@ class ReportService:
         object_id = to_object_id(user.get("id", ""))
         if not object_id:
             return {"state": "COMPLETED", "user_id": None}
-        return {"state": "COMPLETED", "user_id": object_id}
+        return {"state": "COMPLETED", "user_id": {"$in": [object_id, str(user.get("id"))]}}
 
     async def _get_summary(self, scan_id: str, user: dict) -> Optional[ScanSummary]:
         query = {"scan_id": scan_id, **self._base_filter(user)}

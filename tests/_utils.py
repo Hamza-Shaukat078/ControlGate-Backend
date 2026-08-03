@@ -1,12 +1,29 @@
+from functools import lru_cache
 from pathlib import Path
 from contextlib import contextmanager
 import shutil
 import uuid
 
 
+@lru_cache(maxsize=1)
+def _loaded_grammar_languages() -> frozenset:
+    # CPGParser (used by MultiFileRepositoryGraph, the thing these tests actually
+    # exercise) loads grammars via tree_sitter_languages / the per-language pip
+    # packages, not from a locally-compiled build/*.so — that build/ layout is a
+    # leftover from setup_grammars.py's tree-sitter<0.22 Language.build_library
+    # workflow and nothing populates it anymore. Ask CPGParser what it actually
+    # managed to load instead of checking a directory that's permanently empty.
+    from app.domain.analysis.cpg_parser import CPGParser
+
+    try:
+        parser = CPGParser()
+    except Exception:
+        return frozenset()
+    return frozenset(lang.value for lang in parser.languages.keys())
+
+
 def has_grammar(name: str) -> bool:
-    build = Path(__file__).resolve().parent.parent / "build"
-    return (build / f"{name}.so").exists() or (build / f"{name}.dll").exists()
+    return name in _loaded_grammar_languages()
 
 
 @contextmanager

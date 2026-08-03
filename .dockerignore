@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.template
+.git
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/.tmp/
+tests/.tmp_work/
+controlgate.db
+vulcan.db
+repo_uploads/
+attestation_evidence/
+build/

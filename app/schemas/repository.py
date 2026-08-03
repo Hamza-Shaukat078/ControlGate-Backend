@@ -16,6 +16,7 @@ class RepositoryRead(APIModel):
     name: str
     provider: str
     url: str | None = None
+    owner_user_id: str | None = None
     status: str
     default_branch: str
     created_at: datetime | None = None

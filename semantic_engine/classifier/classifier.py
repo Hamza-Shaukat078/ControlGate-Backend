@@ -6,7 +6,7 @@ Reduces false positives from static analysis.
 import logging
 import re
 from typing import List, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from semantic_engine.query_executor.executor import CodeSlice
 from semantic_engine.classifier.llm_service import (
@@ -56,7 +56,6 @@ _PRESENCE_VULN_RULES = {
     "PASSWORD_MANAGER_BLOCKED",
     "PASSWORD_MODIFIED_BEFORE_VERIFY",
     "STATIC_SESSION_SECRET",
-    "XXE_UNSAFE_XML_PARSER",
 }
 
 
@@ -98,6 +97,14 @@ class ClassifiedVulnerability:
     final_severity: str
     final_confidence: float
     is_vulnerable: bool
+
+    # Other rule_ids whose independent finding was merged into this one because
+    # pipeline._dedupe_vulnerabilities decided they're the same underlying
+    # finding (overlapping location + normalized sink) — see that method and
+    # pipeline._format_vulnerability, which unions asvs_controls across
+    # [rule_id] + contributing_rule_ids instead of only using the primary
+    # rule_id's mapping. Empty for the overwhelmingly common one-rule case.
+    contributing_rule_ids: List[str] = field(default_factory=list)
 
 
 class SliceClassifier:

@@ -215,6 +215,23 @@ class QueryExecutor:
                                 severity = "medium"
                             reason += " Sanitizer observed elsewhere in file."
 
+                        # A constant "regex" sink_label made every regex-detected finding
+                        # for the same rule collide (harmless) but also made it impossible
+                        # for a dedup step to ever recognize a regex finding and a
+                        # graph/PathDiscovery finding as the same underlying vulnerability
+                        # (e.g. the same `cursor.execute(...)` call caught by both
+                        # SQL_INJECTION's regex and the taint graph) — nothing about
+                        # "regex" resembles "cursor.execute". Prefer whichever of the
+                        # rule's own declared sink tokens actually appears in the matched
+                        # text — the exact same tokens PathDiscovery matches graph nodes
+                        # against — so the two pathways can converge on an identical
+                        # label; fall back to the matched text itself.
+                        matched_text = match.group(0)
+                        sink_label = next(
+                            (s for s in (query.sinks or []) if s and s.lower() in matched_text.lower()),
+                            None
+                        ) or matched_text.strip()[:80] or "regex"
+
                         slices.append(CodeSlice(
                             slice_id=slice_id,
                             rule_id=query.rule_id,
@@ -229,7 +246,7 @@ class QueryExecutor:
                             code_snippet=snippet,
                             location={"file": file_path, "start_line": line_num, "end_line": line_num},
                             source_label="regex",
-                            sink_label="regex",
+                            sink_label=sink_label,
                             pattern_type="REGEX",
                             reason=reason
                         ))

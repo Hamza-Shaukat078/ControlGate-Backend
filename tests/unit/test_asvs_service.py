@@ -206,6 +206,132 @@ class TestConfigInspectionMerge:
         assert results["V4.1.1"]["verdict"] == "not_tested"
 
 
+class TestConfigOrCompliantStaticMerge:
+    """
+    V3.5.8 is the one control wired to _merge_config_or_compliant_static instead
+    of the plain _merge_config path: the requirement is satisfied by EITHER a
+    restrictive Cross-Origin-Resource-Policy header (config_inspection) OR a
+    Sec-Fetch-* validation marker in application code (a compliant-polarity
+    static finding) — so evaluating it needs both signal sources merged with OR
+    semantics, not treated as conflicting evidence.
+
+    Called directly (not via build_results_for_scan) since the fake catalog
+    above only loads the L1 file and V3.5.8 is an L2-file/L3-level control.
+    """
+
+    def test_failing_config_with_compliant_static_marker_still_passes(self):
+        # The important precedence case: a missing/failing CORP header must NOT
+        # override a compliant Sec-Fetch-* marker found in code, because the
+        # control is genuinely satisfied by either one. If this ever starts
+        # failing, someone changed the branch order so "any fail wins" beats
+        # the OR semantics the control actually requires.
+        summary = _summary(
+            config_findings=[
+                {"control_id": "V3.5.8", "verdict": "fail", "file": "nginx.conf", "line": 4,
+                 "note": "no CORP header", "confidence": 0.5},
+            ],
+            vulnerabilities=[{
+                "type": "Sec-Fetch Resource Guard Marker", "asvs_controls": ["V3.5.8"],
+                "asvs_finding_polarity": "compliant", "confidence": 0.6,
+                "location": {"file": "middleware.js", "start_line": 12},
+                "analysis": {"llm_classification": {}},
+            }],
+        )
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        r = svc._merge_config_or_compliant_static("V3.5.8", summary, "scan-1")
+        assert r["verdict"] == "pass"
+
+    def test_passing_config_alone_passes(self):
+        summary = _summary(config_findings=[
+            {"control_id": "V3.5.8", "verdict": "pass", "file": "nginx.conf", "line": 4,
+             "note": "Cross-Origin-Resource-Policy: same-origin", "confidence": 0.75},
+        ])
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        r = svc._merge_config_or_compliant_static("V3.5.8", summary, "scan-1")
+        assert r["verdict"] == "pass"
+        assert r["evidence"][0]["file"] == "nginx.conf"
+
+    def test_compliant_static_marker_alone_passes_with_no_config_findings(self):
+        # No nginx.conf in the repo at all — config_findings is empty, not failing.
+        # A code-level Sec-Fetch-* marker should still be sufficient on its own.
+        summary = _summary(vulnerabilities=[{
+            "type": "Sec-Fetch Resource Guard Marker", "asvs_controls": ["V3.5.8"],
+            "asvs_finding_polarity": "compliant", "confidence": 0.6,
+            "location": {"file": "middleware.js", "start_line": 12},
+            "analysis": {"llm_classification": {}},
+        }])
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        r = svc._merge_config_or_compliant_static("V3.5.8", summary, "scan-1")
+        assert r["verdict"] == "pass"
+        assert r["evidence"][0]["file"] == "middleware.js"
+
+    def test_no_evidence_at_all_is_not_tested(self):
+        summary = _summary()
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        r = svc._merge_config_or_compliant_static("V3.5.8", summary, "scan-1")
+        assert r["verdict"] == "not_tested"
+
+    def test_failing_config_with_no_static_marker_fails(self):
+        summary = _summary(config_findings=[
+            {"control_id": "V3.5.8", "verdict": "fail", "file": "nginx.conf", "line": 4,
+             "note": "no CORP header", "confidence": 0.5},
+        ])
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        r = svc._merge_config_or_compliant_static("V3.5.8", summary, "scan-1")
+        assert r["verdict"] == "fail"
+
+
+class TestConfigOrDynamicMerge:
+    """
+    V13.4.6 (backend version info not exposed) is wired to _merge_config_or_dynamic:
+    evidence can come from the static nginx server_tokens reading (config_inspection)
+    or the live Server/X-Powered-By header probe (dynamic_probe) — a fail from
+    either source wins, consistent with this module's conservative-by-default policy.
+    """
+
+    def test_passing_config_alone_passes(self):
+        summary = _summary(config_findings=[
+            {"control_id": "V13.4.6", "verdict": "pass", "file": "nginx.conf", "line": 6,
+             "note": "server_tokens off directive found", "confidence": 0.7},
+        ])
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        r = svc._merge_config_or_dynamic("V13.4.6", summary, "scan-1")
+        assert r["verdict"] == "pass"
+
+    def test_passing_probe_alone_passes(self):
+        summary = _summary(dynamic_probe_findings=[
+            {"control_id": "V13.4.6", "verdict": "pass",
+             "note": "No version-revealing Server/X-Powered-By header observed", "confidence": 0.6},
+        ])
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        r = svc._merge_config_or_dynamic("V13.4.6", summary, "scan-1")
+        assert r["verdict"] == "pass"
+
+    def test_passing_config_with_failing_probe_fails(self):
+        # The important precedence case: a live header leak must NOT be masked
+        # by a clean static config reading — fail from either source wins.
+        summary = _summary(
+            config_findings=[
+                {"control_id": "V13.4.6", "verdict": "pass", "file": "nginx.conf", "line": 6,
+                 "note": "server_tokens off directive found", "confidence": 0.7},
+            ],
+            dynamic_probe_findings=[
+                {"control_id": "V13.4.6", "verdict": "fail",
+                 "note": "Live response discloses backend component version info — Server: nginx/1.18.0",
+                 "confidence": 0.75},
+            ],
+        )
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        r = svc._merge_config_or_dynamic("V13.4.6", summary, "scan-1")
+        assert r["verdict"] == "fail"
+
+    def test_no_evidence_at_all_is_not_tested(self):
+        summary = _summary()
+        svc = ASVSService(FakeDB(scan_summary=summary))
+        r = svc._merge_config_or_dynamic("V13.4.6", summary, "scan-1")
+        assert r["verdict"] == "not_tested"
+
+
 class TestDependencyScanMerge:
     @pytest.mark.asyncio
     async def test_uses_dependency_control_result_directly(self):

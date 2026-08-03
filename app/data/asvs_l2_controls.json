@@ -341,6 +341,72 @@
     "check_ref": null
   },
   {
+    "control_id": "V4.1.4",
+    "chapter_id": "V4",
+    "chapter": "V4: API and Web Service",
+    "section_id": "4.1",
+    "section_name": "Generic Web Service Security",
+    "level": "L3",
+    "description": "Verify that only HTTP methods explicitly supported by the application or its API (including OPTIONS during preflight requests) can be used, and that unused methods are blocked.",
+    "detection_strategy": "config_inspection",
+    "check_ref": null
+  },
+  {
+    "control_id": "V4.1.5",
+    "chapter_id": "V4",
+    "chapter": "V4: API and Web Service",
+    "section_id": "4.1",
+    "section_name": "Generic Web Service Security",
+    "level": "L3",
+    "description": "Verify that per-message digital signatures are used to provide additional assurance on top of transport protections for requests or transactions which are highly sensitive or which traverse a number of systems.",
+    "detection_strategy": "manual_attestation",
+    "check_ref": null
+  },
+  {
+    "control_id": "V4.2.2",
+    "chapter_id": "V4",
+    "chapter": "V4: API and Web Service",
+    "section_id": "4.2",
+    "section_name": "HTTP Message Structure Validation",
+    "level": "L3",
+    "description": "Verify that when generating HTTP messages, the Content-Length header field does not conflict with the length of the content as determined by the framing of the HTTP protocol, in order to prevent request smuggling attacks.",
+    "detection_strategy": "manual_attestation",
+    "check_ref": null
+  },
+  {
+    "control_id": "V4.2.3",
+    "chapter_id": "V4",
+    "chapter": "V4: API and Web Service",
+    "section_id": "4.2",
+    "section_name": "HTTP Message Structure Validation",
+    "level": "L3",
+    "description": "Verify that the application does not send nor accept HTTP/2 or HTTP/3 messages with connection-specific header fields such as Transfer-Encoding, to prevent response splitting and header injection attacks.",
+    "detection_strategy": "static_code",
+    "check_ref": null
+  },
+  {
+    "control_id": "V4.2.4",
+    "chapter_id": "V4",
+    "chapter": "V4: API and Web Service",
+    "section_id": "4.2",
+    "section_name": "HTTP Message Structure Validation",
+    "level": "L3",
+    "description": "Verify that the application only accepts HTTP/2 and HTTP/3 requests where the header fields and values do not contain any CR, LF, or CRLF sequences, to prevent header injection attacks.",
+    "detection_strategy": "manual_attestation",
+    "check_ref": null
+  },
+  {
+    "control_id": "V4.2.5",
+    "chapter_id": "V4",
+    "chapter": "V4: API and Web Service",
+    "section_id": "4.2",
+    "section_name": "HTTP Message Structure Validation",
+    "level": "L3",
+    "description": "Verify that, if the application (backend or frontend) builds and sends requests, it uses validation, sanitization, or other mechanisms to avoid creating URIs or HTTP request header fields (such as Authorization or Cookie) which are too long to be accepted by the receiving component, preventing a denial of service.",
+    "detection_strategy": "static_code",
+    "check_ref": null
+  },
+  {
     "control_id": "V4.3.1",
     "chapter_id": "V4",
     "chapter": "V4: API and Web Service",
@@ -370,6 +436,50 @@
     "section_name": "File Upload and Content",
     "level": "L2",
     "description": "Verify that the application checks compressed files (e.g., zip, gz, docx, odt) against maximum allowed uncompressed size and against maximum number of files before uncompressing the file.",
+    "detection_strategy": "static_code",
+    "check_ref": null
+  },
+  {
+    "control_id": "V5.2.4",
+    "chapter_id": "V5",
+    "chapter": "V5: File Handling",
+    "section_id": "5.2",
+    "section_name": "File Upload and Content",
+    "level": "L3",
+    "description": "Verify that the application enforces per-user file upload quotas and maximum file counts so a single user cannot exhaust storage.",
+    "detection_strategy": "static_code",
+    "check_ref": null
+  },
+  {
+    "control_id": "V5.2.5",
+    "chapter_id": "V5",
+    "chapter": "V5: File Handling",
+    "section_id": "5.2",
+    "section_name": "File Upload and Content",
+    "level": "L3",
+    "description": "Verify that compressed file extraction rejects symlink entries unless explicitly required and restricted by an allowlist.",
+    "detection_strategy": "static_code",
+    "check_ref": null
+  },
+  {
+    "control_id": "V5.2.6",
+    "chapter_id": "V5",
+    "chapter": "V5: File Handling",
+    "section_id": "5.2",
+    "section_name": "File Upload and Content",
+    "level": "L3",
+    "description": "Verify that uploaded images are rejected when their width, height, or total pixel count exceeds configured limits.",
+    "detection_strategy": "static_code",
+    "check_ref": null
+  },
+  {
+    "control_id": "V5.3.3",
+    "chapter_id": "V5",
+    "chapter": "V5: File Handling",
+    "section_id": "5.3",
+    "section_name": "File Execution",
+    "level": "L3",
+    "description": "Verify that server-side decompression ignores or validates archive entry paths so extraction cannot write outside the intended directory.",
     "detection_strategy": "static_code",
     "check_ref": null
   },
@@ -1193,7 +1303,7 @@
     "chapter": "V1: Encoding and Sanitization",
     "section_id": "1.1",
     "section_name": "Output Encoding and Injection Prevention",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the application decodes and canonicalizes untrusted input exactly once, before validation, rather than repeatedly or after validation.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1204,7 +1314,7 @@
     "chapter": "V1: Encoding and Sanitization",
     "section_id": "1.3",
     "section_name": "Sanitization",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that data is sanitized appropriately for the context in which it is used, beyond the specific injection types (SQL, command, path, etc.) individually covered elsewhere in this chapter.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1215,8 +1325,8 @@
     "chapter": "V1: Encoding and Sanitization",
     "section_id": "1.4",
     "section_name": "Memory Safety",
-    "level": "L1",
-    "description": "Verify that the application uses memory-safe string, buffer, and pointer handling. Not applicable to this scanner's target languages — Python, JavaScript, and TypeScript are memory-safe, managed-runtime languages; this control is only relevant to C/C++ components.",
+    "level": "L2",
+    "description": "Verify that the application uses memory-safe string, buffer, and pointer handling. Not applicable to this scanner's target languages \u00e2\u20ac\u201d Python, JavaScript, and TypeScript are memory-safe, managed-runtime languages; this control is only relevant to C/C++ components.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
   },
@@ -1226,7 +1336,7 @@
     "chapter": "V1: Encoding and Sanitization",
     "section_id": "1.4",
     "section_name": "Memory Safety",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the application checks for and handles integer overflow/underflow conditions. Not applicable in the fixed-width sense to Python (arbitrary-precision integers) or JavaScript/TypeScript (Number/BigInt semantics), which do not have C-style integer overflow.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1237,7 +1347,7 @@
     "chapter": "V1: Encoding and Sanitization",
     "section_id": "1.4",
     "section_name": "Memory Safety",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the application has no dangling pointer or use-after-free vulnerabilities. Not applicable to memory-safe, garbage-collected languages such as Python, JavaScript, and TypeScript.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1248,7 +1358,7 @@
     "chapter": "V2: Validation and Business Logic",
     "section_id": "2.1",
     "section_name": "Validation and Business Logic Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the application's documentation defines cross-field consistency rules for related fields (e.g. start-date must precede end-date).",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1259,7 +1369,7 @@
     "chapter": "V2: Validation and Business Logic",
     "section_id": "2.1",
     "section_name": "Validation and Business Logic Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the application's documentation defines business logic limits (e.g. maximum transfer amount) and the rationale behind them.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1270,7 +1380,7 @@
     "chapter": "V2: Validation and Business Logic",
     "section_id": "2.2",
     "section_name": "Input Validation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that related items of submitted data are validated as being reasonable together, using business logic rules, in the context of the entire request or transaction.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1281,7 +1391,7 @@
     "chapter": "V2: Validation and Business Logic",
     "section_id": "2.3",
     "section_name": "Business Logic Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that business logic limits are enforced consistent with the documented policy (control V2.1.3).",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1292,7 +1402,7 @@
     "chapter": "V2: Validation and Business Logic",
     "section_id": "2.3",
     "section_name": "Business Logic Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that a business transaction, and its associated database writes, are processed as an atomic, all-or-nothing operation.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1303,7 +1413,7 @@
     "chapter": "V2: Validation and Business Logic",
     "section_id": "2.3",
     "section_name": "Business Logic Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that business-logic-level locking is used to prevent race conditions such as double-booking or duplicate submission of the same business transaction.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1314,7 +1424,7 @@
     "chapter": "V3: Web Frontend Security",
     "section_id": "3.5",
     "section_name": "Browser Origin Separation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that separate applications, especially those from different security domains, are hosted on separate hostnames rather than relying on path-based separation under a shared hostname.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1325,7 +1435,7 @@
     "chapter": "V4: API and Web Service",
     "section_id": "4.1",
     "section_name": "Generic Web Service Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that automatic HTTP-to-HTTPS redirection is applied only to user-facing endpoints, and that API/service endpoints instead reject plaintext HTTP outright rather than redirecting.",
     "detection_strategy": "config_inspection",
     "check_ref": null
@@ -1336,7 +1446,7 @@
     "chapter": "V4: API and Web Service",
     "section_id": "4.4",
     "section_name": "WebSocket",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that WebSocket sessions use a dedicated session token, separate from and not derived from the main HTTP session token.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1347,7 +1457,7 @@
     "chapter": "V4: API and Web Service",
     "section_id": "4.4",
     "section_name": "WebSocket",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that a WebSocket token is only obtainable after the client has first established an authenticated session over HTTPS.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1358,7 +1468,7 @@
     "chapter": "V5: File Handling",
     "section_id": "5.1",
     "section_name": "File Handling Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the application's documentation defines the permitted file types and maximum file sizes for upload.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1369,7 +1479,7 @@
     "chapter": "V5: File Handling",
     "section_id": "5.4",
     "section_name": "File Download",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that files made available for download are scanned by an antivirus/malware engine before being served. Requires an integrated AV engine; not verifiable via static code analysis.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1380,7 +1490,7 @@
     "chapter": "V6: Authentication",
     "section_id": "6.1",
     "section_name": "Authentication Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation defines a context-specific list of banned/weak password words (organization name, product name, common patterns) used in password-strength checks.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1391,7 +1501,7 @@
     "chapter": "V6: Authentication",
     "section_id": "6.1",
     "section_name": "Authentication Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation lists all valid authentication pathways, including any fallback or recovery flows.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1402,7 +1512,7 @@
     "chapter": "V6: Authentication",
     "section_id": "6.3",
     "section_name": "General Authentication Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that multi-factor authentication, or an equivalent-strength combination of factors, is required commensurate with the application's risk profile.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1413,8 +1523,8 @@
     "chapter": "V6: Authentication",
     "section_id": "6.3",
     "section_name": "General Authentication Security",
-    "level": "L1",
-    "description": "Verify that there are no undocumented or backdoor authentication pathways. Absence can't be proven via static pattern matching — requires a full authentication-flow audit.",
+    "level": "L2",
+    "description": "Verify that there are no undocumented or backdoor authentication pathways. Absence can't be proven via static pattern matching \u00e2\u20ac\u201d requires a full authentication-flow audit.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
   },
@@ -1424,7 +1534,7 @@
     "chapter": "V6: Authentication",
     "section_id": "6.4",
     "section_name": "Authentication Factor Lifecycle and Recovery",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the password reset flow cannot be used to bypass multi-factor authentication.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1435,7 +1545,7 @@
     "chapter": "V6: Authentication",
     "section_id": "6.4",
     "section_name": "Authentication Factor Lifecycle and Recovery",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that re-proofing of identity is required when a user loses access to an MFA factor, before that factor can be reset or replaced.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1446,7 +1556,7 @@
     "chapter": "V6: Authentication",
     "section_id": "6.6",
     "section_name": "Out-of-Band Verifier",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that SMS or telephony-based OTP is only used with a validated phone number, and that an alternate authentication method is offered.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1457,7 +1567,7 @@
     "chapter": "V6: Authentication",
     "section_id": "6.6",
     "section_name": "Out-of-Band Verifier",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that out-of-band authentication codes are bound to the original authentication request (e.g. via a shared transaction ID), preventing use with an unrelated session. Requires cross-request runtime state, not visible in static code.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1468,7 +1578,7 @@
     "chapter": "V6: Authentication",
     "section_id": "6.8",
     "section_name": "Single Sign-On Authentication",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that when multiple identity providers are supported, the application prevents identity spoofing by ensuring accounts cannot be linked across IdPs without proof of ownership.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1479,7 +1589,7 @@
     "chapter": "V6: Authentication",
     "section_id": "6.8",
     "section_name": "Single Sign-On Authentication",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that SAML assertions cannot be replayed, via one-time-use tracking (e.g. the Assertion ID). Requires runtime state, not visible in static code.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1490,7 +1600,7 @@
     "chapter": "V7: Session Management",
     "section_id": "7.1",
     "section_name": "Session Management Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation defines the session inactivity timeout policy.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1501,7 +1611,7 @@
     "chapter": "V7: Session Management",
     "section_id": "7.1",
     "section_name": "Session Management Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation defines the concurrent-session-limit policy.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1512,7 +1622,7 @@
     "chapter": "V7: Session Management",
     "section_id": "7.1",
     "section_name": "Session Management Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation defines the design of federated/SSO session handling.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1523,7 +1633,7 @@
     "chapter": "V7: Session Management",
     "section_id": "7.4",
     "section_name": "Session Termination",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that a credential change (password, MFA factor) terminates all other active sessions for that account.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1534,7 +1644,7 @@
     "chapter": "V7: Session Management",
     "section_id": "7.4",
     "section_name": "Session Termination",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that a logout control is visible and accessible on every authenticated page.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1545,7 +1655,7 @@
     "chapter": "V7: Session Management",
     "section_id": "7.4",
     "section_name": "Session Termination",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that administrators can terminate another user's active session.",
     "detection_strategy": "static_code",
     "check_ref": null
@@ -1556,7 +1666,7 @@
     "chapter": "V7: Session Management",
     "section_id": "7.5",
     "section_name": "Defenses Against Session Exploitation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that users can view and terminate their own active sessions.",
     "detection_strategy": "static_code",
     "check_ref": null
@@ -1567,7 +1677,7 @@
     "chapter": "V7: Session Management",
     "section_id": "7.6",
     "section_name": "Federated Session Management",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that a federated session's lifetime does not exceed the lifetime granted by the identity provider.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1578,7 +1688,7 @@
     "chapter": "V7: Session Management",
     "section_id": "7.6",
     "section_name": "Federated Session Management",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that session creation requires explicit user consent, particularly for federated/SSO logins.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1589,7 +1699,7 @@
     "chapter": "V8: Authorization",
     "section_id": "8.1",
     "section_name": "Authorization Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation defines field-level access rules for sensitive data.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1600,7 +1710,7 @@
     "chapter": "V8: Authorization",
     "section_id": "8.4",
     "section_name": "Multi-Tenant Isolation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that cross-tenant data isolation is enforced throughout the data access layer in multi-tenant applications. Requires a full data-layer architecture review.",
     "detection_strategy": "static_code",
     "check_ref": null
@@ -1611,7 +1721,7 @@
     "chapter": "V9: Self-contained Tokens",
     "section_id": "9.2",
     "section_name": "Token content",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that token audiences are unique per issuer and that signing keys are managed consistently across issuing services. Requires cross-service key-management review.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1622,7 +1732,7 @@
     "chapter": "V10: OAuth and OpenID Connect",
     "section_id": "10.1",
     "section_name": "General OAuth Client Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that OAuth/OIDC tokens are only ever sent to the components that actually need them, per a data-flow architecture review.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1633,7 +1743,7 @@
     "chapter": "V10: OAuth and OpenID Connect",
     "section_id": "10.3",
     "section_name": "OAuth Resource Server",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that authorization decisions are based on validated token claims, not merely on the presence of a token.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1644,7 +1754,7 @@
     "chapter": "V10: OAuth and OpenID Connect",
     "section_id": "10.4",
     "section_name": "OAuth Authorization Server",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the authorization server validates client metadata during dynamic client registration.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1655,7 +1765,7 @@
     "chapter": "V10: OAuth and OpenID Connect",
     "section_id": "10.4",
     "section_name": "OAuth Authorization Server",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that refresh and reference tokens can be revoked via a user- or admin-facing interface.",
     "detection_strategy": "static_code",
     "check_ref": null
@@ -1666,7 +1776,7 @@
     "chapter": "V10: OAuth and OpenID Connect",
     "section_id": "10.4",
     "section_name": "OAuth Authorization Server",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the authorization server issues only the scopes actually needed for the requested access, per its scope-issuance policy.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1677,7 +1787,7 @@
     "chapter": "V10: OAuth and OpenID Connect",
     "section_id": "10.6",
     "section_name": "OpenID Provider (OP) Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the OpenID Provider defends against forced-logout denial-of-service attacks.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1688,7 +1798,7 @@
     "chapter": "V10: OAuth and OpenID Connect",
     "section_id": "10.7",
     "section_name": "User Consent",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the authorization server ensures real, per-request user consent rather than silently reusing a prior grant inappropriately.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1699,7 +1809,7 @@
     "chapter": "V10: OAuth and OpenID Connect",
     "section_id": "10.7",
     "section_name": "User Consent",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the consent screen clearly and accurately shows what access is being granted.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1710,7 +1820,7 @@
     "chapter": "V10: OAuth and OpenID Connect",
     "section_id": "10.7",
     "section_name": "User Consent",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that users can review and revoke previously granted consents.",
     "detection_strategy": "static_code",
     "check_ref": null
@@ -1721,7 +1831,7 @@
     "chapter": "V11: Cryptography",
     "section_id": "11.1",
     "section_name": "Cryptographic Governance",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation defines a key-management policy (generation, rotation, storage, destruction).",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1732,7 +1842,7 @@
     "chapter": "V11: Cryptography",
     "section_id": "11.1",
     "section_name": "Cryptographic Governance",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that a cryptographic inventory (algorithms, key lengths, libraries in use) is maintained as an asset-tracking process.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1743,8 +1853,8 @@
     "chapter": "V11: Cryptography",
     "section_id": "11.2",
     "section_name": "Secure Cryptography Implementation",
-    "level": "L1",
-    "description": "Verify that the application has crypto agility — cryptographic algorithms and key sizes can be swapped without major architectural rework.",
+    "level": "L2",
+    "description": "Verify that the application has crypto agility \u00e2\u20ac\u201d cryptographic algorithms and key sizes can be swapped without major architectural rework.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
   },
@@ -1754,7 +1864,7 @@
     "chapter": "V12: Secure Communications",
     "section_id": "12.1",
     "section_name": "TLS Configuration",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that mutual TLS (mTLS) client certificates are validated and trusted correctly by the server. Requires live TLS handshake inspection.",
     "detection_strategy": "dynamic_probe",
     "check_ref": null
@@ -1765,7 +1875,7 @@
     "chapter": "V12: Secure Communications",
     "section_id": "12.3",
     "section_name": "Transport Layer Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that internal service-to-service TLS connections use trusted or pinned CAs. Requires live connection testing against internal endpoints.",
     "detection_strategy": "dynamic_probe",
     "check_ref": null
@@ -1776,7 +1886,7 @@
     "chapter": "V13: Configuration",
     "section_id": "13.1",
     "section_name": "Configuration Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation maintains an inventory of the application's external and internal communications.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1787,7 +1897,7 @@
     "chapter": "V13: Configuration",
     "section_id": "13.2",
     "section_name": "Backend Communication Configuration",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that service accounts used for backend communication are provisioned with least-privilege access. Requires an IAM/infrastructure review.",
     "detection_strategy": "config_inspection",
     "check_ref": null
@@ -1798,7 +1908,7 @@
     "chapter": "V13: Configuration",
     "section_id": "13.3",
     "section_name": "Secrets Management",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that access to the secrets vault itself is governed by least privilege. Requires an IAM/infrastructure review.",
     "detection_strategy": "config_inspection",
     "check_ref": null
@@ -1809,7 +1919,7 @@
     "chapter": "V14: Data Protection",
     "section_id": "14.1",
     "section_name": "Data Classification",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that sensitive data processed by the application has been identified and classified, as a data-classification exercise.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1820,7 +1930,7 @@
     "chapter": "V14: Data Protection",
     "section_id": "14.1",
     "section_name": "Data Classification",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation defines the protection requirements for each data classification level.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1831,7 +1941,7 @@
     "chapter": "V14: Data Protection",
     "section_id": "14.2",
     "section_name": "General Data Protection",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that technical controls are implemented consistent with the documented data classification (controls V14.1.1/V14.1.2).",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1842,7 +1952,7 @@
     "chapter": "V15: Secure Coding and Architecture",
     "section_id": "15.1",
     "section_name": "Secure Coding and Architecture Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation identifies resource-heavy functionality that requires additional DoS/abuse protection.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1853,8 +1963,8 @@
     "chapter": "V15: Secure Coding and Architecture",
     "section_id": "15.2",
     "section_name": "Security Architecture and Dependencies",
-    "level": "L1",
-    "description": "Verify that the application has resource-exhaustion denial-of-service defenses in place. Broader than a single rate-limit marker — requires an architecture/infrastructure review.",
+    "level": "L2",
+    "description": "Verify that the application has resource-exhaustion denial-of-service defenses in place. Broader than a single rate-limit marker \u00e2\u20ac\u201d requires an architecture/infrastructure review.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
   },
@@ -1864,7 +1974,7 @@
     "chapter": "V16: Security Logging and Error Handling",
     "section_id": "16.1",
     "section_name": "Logging Documentation",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that application documentation maintains an inventory of what is logged and why.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1875,7 +1985,7 @@
     "chapter": "V16: Security Logging and Error Handling",
     "section_id": "16.2",
     "section_name": "Log Processing",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that each log entry includes the full set of required metadata (timestamp, source, event type, outcome, actor). Requires semantic per-call field checking beyond a single static pattern.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1886,7 +1996,7 @@
     "chapter": "V16: Security Logging and Error Handling",
     "section_id": "16.2",
     "section_name": "Log Processing",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that logs are only sent to approved logging destinations. Requires an infrastructure configuration review.",
     "detection_strategy": "static_code",
     "check_ref": null
@@ -1897,7 +2007,7 @@
     "chapter": "V16: Security Logging and Error Handling",
     "section_id": "16.2",
     "section_name": "Log Processing",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that logs are correlatable and use a common format across services, per a format-standardization review.",
     "detection_strategy": "static_code",
     "check_ref": null
@@ -1908,7 +2018,7 @@
     "chapter": "V16: Security Logging and Error Handling",
     "section_id": "16.3",
     "section_name": "Security Logging",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that security-bypass attempts are specifically logged. What constitutes a 'bypass attempt' is semantic and too broad for a single static pattern.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1919,7 +2029,7 @@
     "chapter": "V16: Security Logging and Error Handling",
     "section_id": "16.4",
     "section_name": "Log Content",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that logs are protected from unauthorized access, per an infrastructure access-control review.",
     "detection_strategy": "config_inspection",
     "check_ref": null
@@ -1930,7 +2040,7 @@
     "chapter": "V16: Security Logging and Error Handling",
     "section_id": "16.4",
     "section_name": "Log Content",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that logs are securely transmitted to a separate logging system, per an infrastructure configuration review.",
     "detection_strategy": "static_code",
     "check_ref": null
@@ -1941,7 +2051,7 @@
     "chapter": "V16: Security Logging and Error Handling",
     "section_id": "16.5",
     "section_name": "Error Handling",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the application degrades gracefully when an external dependency fails, per a resilience/architecture review.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1952,7 +2062,7 @@
     "chapter": "V17: WebRTC",
     "section_id": "17.1",
     "section_name": "TURN Server Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the TURN server restricts relay traffic to non-internal IP ranges. Requires TURN-server infrastructure configuration review.",
     "detection_strategy": "config_inspection",
     "check_ref": null
@@ -1963,7 +2073,7 @@
     "chapter": "V17: WebRTC",
     "section_id": "17.2",
     "section_name": "DTLS-SRTP Media Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that DTLS certificate key management is sound, per a crypto-ops review.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1974,7 +2084,7 @@
     "chapter": "V17: WebRTC",
     "section_id": "17.2",
     "section_name": "DTLS-SRTP Media Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that only approved DTLS-SRTP cipher suites are enabled. Requires a live negotiation check.",
     "detection_strategy": "config_inspection",
     "check_ref": null
@@ -1985,7 +2095,7 @@
     "chapter": "V17: WebRTC",
     "section_id": "17.2",
     "section_name": "DTLS-SRTP Media Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that SRTP authentication is actually enforced at runtime by the media server.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -1996,7 +2106,7 @@
     "chapter": "V17: WebRTC",
     "section_id": "17.2",
     "section_name": "DTLS-SRTP Media Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the media server is resilient to malformed SRTP packets. Requires fuzz/dynamic testing, out of scope for static analysis or read-only probing.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
@@ -2007,8 +2117,140 @@
     "chapter": "V17: WebRTC",
     "section_id": "17.3",
     "section_name": "Signaling Server Security",
-    "level": "L1",
+    "level": "L2",
     "description": "Verify that the signaling server is resilient to malformed messages. Requires fuzz/dynamic testing, out of scope for static analysis or read-only probing.",
+    "detection_strategy": "manual_attestation",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.3.5",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.3",
+    "section_name": "Cookie Setup",
+    "level": "L3",
+    "description": "Verify that when the application writes a cookie, the combined cookie name and value length does not exceed 4096 bytes.",
+    "detection_strategy": "dynamic_probe",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.4.7",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.4",
+    "section_name": "Browser Security Mechanism Headers",
+    "level": "L3",
+    "description": "Verify that the Content-Security-Policy header specifies a report-uri or report-to endpoint for policy violation reporting.",
+    "detection_strategy": "config_inspection",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.4.8",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.4",
+    "section_name": "Browser Security Mechanism Headers",
+    "level": "L3",
+    "description": "Verify that HTML-rendering responses include Cross-Origin-Opener-Policy with same-origin or same-origin-allow-popups.",
+    "detection_strategy": "config_inspection",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.5.6",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.5",
+    "section_name": "Browser Origin Separation",
+    "level": "L3",
+    "description": "Verify that JSONP functionality is not enabled anywhere in the application.",
+    "detection_strategy": "static_code",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.5.7",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.5",
+    "section_name": "Browser Origin Separation",
+    "level": "L3",
+    "description": "Verify that data requiring authorization is not included in script resource responses.",
+    "detection_strategy": "static_code",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.5.8",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.5",
+    "section_name": "Browser Origin Separation",
+    "level": "L3",
+    "description": "Verify that authenticated resources can only be embedded cross-origin when intended, using strict Sec-Fetch validation or a restrictive Cross-Origin-Resource-Policy header.",
+    "detection_strategy": "config_inspection",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.6.1",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.6",
+    "section_name": "Subresource Integrity",
+    "level": "L3",
+    "description": "Verify that externally hosted client-side assets are static, versioned, and protected with Subresource Integrity unless a documented exception exists.",
+    "detection_strategy": "static_code",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.7.4",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.7",
+    "section_name": "Other Browser Security Considerations",
+    "level": "L3",
+    "description": "Verify that the application's top-level domain is added to the public HSTS preload list.",
+    "detection_strategy": "dynamic_probe",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.1.1",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.1",
+    "section_name": "Web Frontend Security Documentation",
+    "level": "L3",
+    "description": "Verify that application documentation states the expected security features that browsers using the application must support (such as HTTPS, HSTS, CSP, and other relevant HTTP security mechanisms), and defines how the application must behave when some of these features are not available (e.g. warning the user or blocking access).",
+    "detection_strategy": "manual_attestation",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.2.3",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.2",
+    "section_name": "Unintended Content Interpretation",
+    "level": "L3",
+    "description": "Verify that the application avoids DOM clobbering when using client-side JavaScript, by employing explicit variable declarations, strict type checking, avoiding globals stored on the document object, and implementing namespace isolation.",
+    "detection_strategy": "manual_attestation",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.7.3",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.7",
+    "section_name": "Other Browser Security Considerations",
+    "level": "L3",
+    "description": "Verify that the application shows a notification when the user is being redirected to a URL outside of the application's control, with an option to cancel the navigation.",
+    "detection_strategy": "manual_attestation",
+    "check_ref": null
+  },
+  {
+    "control_id": "V3.7.5",
+    "chapter_id": "V3",
+    "chapter": "V3: Web Frontend Security",
+    "section_id": "3.7",
+    "section_name": "Other Browser Security Considerations",
+    "level": "L3",
+    "description": "Verify that the application behaves as documented (such as warning the user or blocking access) if the browser used to access the application does not support the expected security features.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
   }

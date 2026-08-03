@@ -1,4 +1,5 @@
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
 mongomock>=4.1.2
+mongomock-motor>=0.0.34
 pymongo>=4.6.0

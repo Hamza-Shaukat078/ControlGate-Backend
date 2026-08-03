@@ -98,3 +98,41 @@ class TestWholeFileSanitizerDowngrade:
         by_file = {s.location["file"]: s for s in slices}
         assert by_file["routes/admin.js"].confidence == "medium"
         assert by_file["app.js"].confidence == "low"
+
+
+class TestRegexSliceSinkLabel:
+    """
+    sink_label used to be hardcoded to the literal string "regex" for every
+    regex-detected slice — meaningless, and impossible for pipeline.py's
+    dedup step to ever match against a graph-detected finding's real sink
+    label like "cursor.execute". It now prefers whichever of the rule's own
+    declared `sinks` tokens actually appears in the matched text — the same
+    tokens PathDiscovery matches graph nodes against — so a regex hit and a
+    taint-graph hit on the same call can be recognized as the same finding.
+    """
+
+    def test_sink_label_uses_matching_rule_sink_token(self):
+        rule = _rule(
+            regex_patterns=[r"cursor\.execute\s*\("],
+            sinks=["cursor.execute", "cur.execute"],
+        )
+        code = "cursor.execute(query)"
+        slices = QueryExecutor().execute_query(EMPTY_GRAPH, rule, code)
+        assert len(slices) == 1
+        assert slices[0].sink_label == "cursor.execute"
+
+    def test_sink_label_falls_back_to_matched_text_when_no_sink_token_present(self):
+        rule = _rule(
+            regex_patterns=[r"password\s*=\s*request\.args"],
+            sinks=["cursor.execute"],
+        )
+        code = "password = request.args.get('pw')"
+        slices = QueryExecutor().execute_query(EMPTY_GRAPH, rule, code)
+        assert len(slices) == 1
+        assert slices[0].sink_label != "regex"
+        assert "password" in slices[0].sink_label
+
+    def test_sink_label_never_the_old_placeholder_when_rule_has_sinks(self):
+        rule = _rule(regex_patterns=[r"eval\s*\("], sinks=["eval"])
+        slices = QueryExecutor().execute_query(EMPTY_GRAPH, rule, "eval(x)")
+        assert slices[0].sink_label == "eval"

@@ -6,7 +6,7 @@ from app.schemas.common import APIModel
 
 class UserCreate(APIModel):
     email: EmailStr
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=8)
     full_name: str | None = None
 
 
@@ -37,7 +37,7 @@ class PasswordResetRequest(APIModel):
 
 class PasswordResetConfirm(APIModel):
     token: str
-    new_password: str = Field(min_length=6)
+    new_password: str = Field(min_length=8)
 
 
 class PasswordResetValidate(APIModel):

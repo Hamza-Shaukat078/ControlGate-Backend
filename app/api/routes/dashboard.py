@@ -40,7 +40,10 @@ async def summary(
         severity["MEDIUM"] += by_sev.get("medium", 0)
         severity["LOW"] += by_sev.get("low", 0)
 
-    repos = await session.execute(select(Repository))
+    repo_stmt = select(Repository)
+    if user.get("role") != UserRole.ADMIN.value:
+        repo_stmt = repo_stmt.where(Repository.owner_user_id == user.get("id"))
+    repos = await session.execute(repo_stmt)
     repo_count = len(list(repos.scalars().all()))
 
     # Risk score 0–100: weighted sum of vulns by severity, capped at 100

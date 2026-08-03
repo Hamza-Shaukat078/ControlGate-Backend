@@ -4,6 +4,7 @@ Ranks source -> sink paths using heuristic scoring and returns CodeSlice candida
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -24,16 +25,25 @@ class CandidatePath:
 
 
 class PathDiscovery:
-    # Stores BFS depth, candidate count, and score threshold config
+    # Stores BFS depth, candidate count, score threshold, and locality config
     def __init__(
         self,
         max_depth: int = 50,
         max_candidates: int = 200,
-        score_threshold: float = 0.35
+        score_threshold: float = 0.35,
+        max_cross_file_hops: int = 2
     ):
         self.max_depth = max_depth
         self.max_candidates = max_candidates
         self.score_threshold = score_threshold
+        # Real security-relevant flows are almost always local: within a file, or
+        # a short interprocedural call chain into one or two neighboring modules.
+        # Bounding how many *file boundaries* a single path may cross (rather than
+        # gating on total graph size) keeps per-source search cost roughly constant
+        # regardless of repo size — a 15-file repo costs the same per source as a
+        # 3-file one, instead of the search silently going from "whole graph" to
+        # "nothing at all" at some hardcoded node-count cliff.
+        self.max_cross_file_hops = max_cross_file_hops
 
     # Main entry — runs BFS from all sources to sinks, scores paths, emits CodeSlices
     def discover(
@@ -42,16 +52,10 @@ class PathDiscovery:
         source_code_map: Dict[str, str],
         query_store: QueryStore
     ) -> List[CodeSlice]:
-        # Skip path discovery for large graphs — source/sink resolution alone is
-        # O(nodes × patterns) and BFS adds little value when cross-file flows span
-        # 40+ modules.  Regex detection handles these fixtures instead.
-        if len(graph.nodes) > 3000:
-            return []
-
         # High-level flow: collect candidate sources/sinks, traverse paths,
         # score them, then emit CodeSlice objects for downstream analysis.
         node_map = {n.id: n for n in graph.nodes}
-        sources, sinks, sanitizers = self._collect_patterns(graph, query_store)
+        sources, sinks, sanitizers, source_owners, sink_owners = self._collect_patterns(graph, query_store)
         if not sources or not sinks:
             return []
 
@@ -59,7 +63,10 @@ class PathDiscovery:
         candidates: List[CandidatePath] = []
 
         for source in sources:
-            paths = self._bfs_paths(source.id, {s.id for s in sinks}, adj, node_map)
+            paths = self._bfs_paths(
+                source.id, {s.id for s in sinks}, adj, node_map,
+                max_cross_file_hops=self.max_cross_file_hops
+            )
             for path in paths:
                 sink_node = node_map.get(path[-1])
                 if not sink_node:
@@ -76,12 +83,15 @@ class PathDiscovery:
         slices: List[CodeSlice] = []
         for cand in candidates:
             snippet, location = self._extract_snippet(node_map, edge_map, cand.path_nodes, source_code_map)
+            rule_id, rule_name, owasp, cwe = self._attribute_rule(
+                cand.source_node.id, cand.sink_node.id, source_owners, sink_owners, query_store
+            )
             slices.append(CodeSlice(
                 slice_id=f"DISCOVERY_{cand.source_node.id}_{cand.sink_node.id}",
-                rule_id="PATH_DISCOVERY",
-                rule_name="Path Discovery",
-                owasp="A03",
-                cwe=None,
+                rule_id=rule_id,
+                rule_name=rule_name,
+                owasp=owasp,
+                cwe=cwe,
                 severity=self._severity_from_score(cand.score),
                 confidence="medium",
                 source_node_id=cand.source_node.id,
@@ -97,31 +107,77 @@ class PathDiscovery:
 
         return slices
 
-    # Aggregates source/sink patterns from all query rules and graph metadata roles
+    # Attributes a discovered path back to the rule whose source+sink pattern lists
+    # both matched it, if any — see _collect_patterns. If the source and sink both
+    # came from one existing rule's pattern list, this genuinely is an instance of
+    # that rule's vulnerability class found via the graph instead of the regex, so
+    # inheriting its owasp/cwe (and, downstream via query_store.get_query in
+    # pipeline._format_vulnerability, its asvs_controls) is justified — not a guess.
+    # A path whose source and sink don't share a single owning rule is a genuinely
+    # novel combination; it stays tagged "PATH_DISCOVERY" with no owasp/cwe rather
+    # than being defaulted to a fake A03, so it surfaces as unclassified instead of
+    # silently borrowing an unrelated rule's identity.
+    def _attribute_rule(
+        self,
+        source_id: str,
+        sink_id: str,
+        source_owners: Dict[str, Set[str]],
+        sink_owners: Dict[str, Set[str]],
+        query_store: QueryStore
+    ) -> Tuple[str, str, Optional[str], Optional[str]]:
+        common = source_owners.get(source_id, set()) & sink_owners.get(sink_id, set())
+        if common:
+            matched_rule = query_store.get_query(sorted(common)[0])
+            if matched_rule:
+                return matched_rule.rule_id, matched_rule.name, matched_rule.owasp, matched_rule.cwe
+        return "PATH_DISCOVERY", "Unclassified Data-Flow Finding", None, None
+
+    # Aggregates source/sink patterns from all query rules and graph metadata roles.
+    # Also tracks which rule_id(s) matched each node's label, keyed by node.id, so a
+    # discovered path can later be attributed back to the rule that actually explains
+    # it (see _attribute_rule) instead of always falling back to a generic, ASVS-less
+    # "PATH_DISCOVERY" identity. Metadata-role sources/sinks (security_role ==
+    # "source"/"sink") aren't tied to any specific rule's pattern list, so they're
+    # added to sources/sinks but never recorded as an "owner" — a path built only from
+    # those stays correctly unattributed.
     def _collect_patterns(
         self,
         graph: SemanticGraph,
         query_store: QueryStore
-    ) -> Tuple[List[GraphNode], List[GraphNode], Set[str]]:
-        # Sources/sinks come from both query patterns and graph metadata roles.
+    ) -> Tuple[List[GraphNode], List[GraphNode], Set[str], Dict[str, Set[str]], Dict[str, Set[str]]]:
         sources: List[GraphNode] = []
         sinks: List[GraphNode] = []
         sanitizers: Set[str] = set()
+        source_owners: Dict[str, Set[str]] = defaultdict(set)
+        sink_owners: Dict[str, Set[str]] = defaultdict(set)
 
         queries = query_store.get_all_queries()
-        source_patterns = []
-        sink_patterns = []
+        source_patterns: List[Tuple[str, str]] = []
+        sink_patterns: List[Tuple[str, str]] = []
         for q in queries:
-            source_patterns.extend(q.sources)
-            sink_patterns.extend(q.sinks)
+            source_patterns.extend((q.rule_id, p) for p in q.sources)
+            sink_patterns.extend((q.rule_id, p) for p in q.sinks)
             sanitizers.update(q.sanitizers)
 
         for node in graph.nodes:
             node_label = (node.name or node.id).lower()
-            if any(self._label_matches_pattern(node_label, p.lower()) for p in source_patterns):
+
+            matching_source_rules = {
+                rule_id for rule_id, p in source_patterns
+                if self._label_matches_pattern(node_label, p.lower())
+            }
+            if matching_source_rules:
+                source_owners[node.id] |= matching_source_rules
                 sources.append(node)
-            if any(self._label_matches_pattern(node_label, p.lower()) for p in sink_patterns):
+
+            matching_sink_rules = {
+                rule_id for rule_id, p in sink_patterns
+                if self._label_matches_pattern(node_label, p.lower())
+            }
+            if matching_sink_rules:
+                sink_owners[node.id] |= matching_sink_rules
                 sinks.append(node)
+
             if node.metadata and node.metadata.security_role == "source":
                 if node not in sources:
                     sources.append(node)
@@ -129,7 +185,7 @@ class PathDiscovery:
                 if node not in sinks:
                     sinks.append(node)
 
-        return sources, sinks, sanitizers
+        return sources, sinks, sanitizers, source_owners, sink_owners
 
     # Token-aware label matching to avoid partial-word false positives
     def _label_matches_pattern(self, label_lower: str, pattern_lower: str) -> bool:
@@ -178,28 +234,41 @@ class PathDiscovery:
                 adj.setdefault(edge.from_node, []).append(edge.to_node)
         return adj, edge_map
 
-    # BFS that finds all source→sink paths up to max depth and candidate count
+    # BFS that finds all source→sink paths, bounded by max depth, candidate count,
+    # and the number of file boundaries a path is allowed to cross.
     def _bfs_paths(
         self,
         source_id: str,
         sink_ids: Set[str],
         adj: Dict[str, List[str]],
-        node_map: Dict[str, GraphNode]
+        node_map: Dict[str, GraphNode],
+        max_cross_file_hops: int = 2
     ) -> List[List[str]]:
         # BFS with depth, candidate, and hard operation limits to prevent queue explosion.
         MAX_BFS_OPS = 5_000
 
         paths: List[List[str]] = []
         from collections import deque as _deque
-        queue: _deque = _deque([[source_id]])
-        visited: set = {source_id}
+
+        source_node = node_map.get(source_id)
+        source_file = source_node.file if source_node else None
+
+        # Queue/visited state includes the file-crossing count so far, not just the
+        # node id — traversal stays unbounded *within* a file (same file = 0 extra
+        # hops) but a path is dropped the moment it would cross more than
+        # max_cross_file_hops distinct file boundaries. This is what keeps a single
+        # source's search cost roughly constant regardless of how many files/nodes
+        # the rest of the repo's graph has: once the hop budget is spent, the
+        # search simply can't wander into module #16.
+        queue: _deque = _deque([([source_id], 0, source_file)])
+        visited: Set[Tuple[str, int]] = {(source_id, 0)}
         bfs_ops = 0
 
         while queue and len(paths) < self.max_candidates:
             bfs_ops += 1
             if bfs_ops > MAX_BFS_OPS:
                 break
-            path = queue.popleft()  # O(1) vs list.pop(0) which is O(n)
+            path, hops, last_file = queue.popleft()  # O(1) vs list.pop(0) which is O(n)
             if len(path) > self.max_depth:
                 continue
             current = path[-1]
@@ -210,9 +279,16 @@ class PathDiscovery:
             for neighbor in adj.get(current, []):
                 if neighbor in path:
                     continue
-                if neighbor not in visited or neighbor in sink_ids:
-                    visited.add(neighbor)
-                    queue.append(path + [neighbor])
+                neighbor_node = node_map.get(neighbor)
+                neighbor_file = neighbor_node.file if neighbor_node else None
+                crosses_file = bool(last_file and neighbor_file and neighbor_file != last_file)
+                new_hops = hops + (1 if crosses_file else 0)
+                if new_hops > max_cross_file_hops:
+                    continue
+                state = (neighbor, new_hops)
+                if state not in visited or neighbor in sink_ids:
+                    visited.add(state)
+                    queue.append((path + [neighbor], new_hops, neighbor_file or last_file))
 
         return paths
 

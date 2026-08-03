@@ -12,6 +12,8 @@ from app.core.permissions import can_access_resource, check_scan_quota
 from app.core.exceptions import AuthorizationException, ResourceNotFoundException
 from datetime import datetime
 from app.core.trace import trace_step
+from app.core.crypto import decrypt_secret
+from app.core.network import validate_public_git_url, validate_public_http_url
 import asyncio
 
 
@@ -36,6 +38,8 @@ async def scan_ws(
       {type:"error",  message}
     """
     from app.core.security import decode_token
+    from app.db.mongo import get_mongo_database, to_object_id
+    from app.enums.role import UserRole
 
     if not token:
         await websocket.close(code=4001)
@@ -47,10 +51,26 @@ async def scan_ws(
         await websocket.close(code=4001)
         return
 
-    await websocket.accept()
-
-    from app.db.mongo import get_mongo_database
     db = get_mongo_database()
+    jti = payload.get("jti")
+    if jti and await db.token_revocations.find_one({"jti": jti}):
+        await websocket.close(code=4001)
+        return
+    user_oid = to_object_id(user_id)
+    user_doc = await db.users.find_one({"_id": user_oid}) if user_oid else None
+    if not user_doc or not user_doc.get("is_active", True):
+        await websocket.close(code=4001)
+        return
+
+    scan = await db.scans.find_one({"scan_id": scan_id})
+    if not scan:
+        await websocket.close(code=4004)
+        return
+    if user_doc.get("role") != UserRole.ADMIN.value and str(scan.get("user_id")) != user_id:
+        await websocket.close(code=4003)
+        return
+
+    await websocket.accept()
 
     last_log_count = 0
     try:
@@ -117,6 +137,8 @@ async def start_scan(
     try:
         # Enforce monthly scan quota before starting (C1-C5)
         await check_scan_quota(user, db)
+        if payload.target_url:
+            validate_public_http_url(payload.target_url, allow_http=True)
 
         service = ScanService(db)
         repo_url = None
@@ -125,10 +147,10 @@ async def start_scan(
         if payload.repo_id:
             trace_step("Scan input mode: REPOSITORY (repo_id provided)")
             repo_service = RepositoryService()
-            repo = await repo_service.get(session, payload.repo_id)
+            repo = await repo_service.get(session, payload.repo_id, user)
             repo_url = repo.url
             repo_provider = repo.provider
-            repo_token = repo.access_token
+            repo_token = decrypt_secret(repo.access_token)
         else:
             trace_step("Scan input mode: DIRECT_CODE (no repo_id)")
 
@@ -155,6 +177,10 @@ async def start_scan(
             input_type=input_type,
             created_at=datetime.utcnow().isoformat()
         )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -180,16 +206,21 @@ async def get_diff_files(
     from app.services.repository_service import RepositoryService
 
     repo_svc = RepositoryService()
-    repo = await repo_svc.get(session, repo_id)
+    repo = await repo_svc.get(session, repo_id, user)
     if not repo or not repo.url:
         raise HTTPException(status_code=404, detail="Repository not found or has no URL")
+    try:
+        validate_public_git_url(repo.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     tmp = Path(tempfile.mkdtemp(prefix="vulcan-diff-"))
     try:
         # Shallow clone to get diff
         clone_url = repo.url
-        if repo.access_token and clone_url.startswith("https://"):
-            clone_url = clone_url.replace("https://", f"https://{repo.access_token}@", 1)
+        token = decrypt_secret(repo.access_token)
+        if token and clone_url.startswith("https://"):
+            clone_url = clone_url.replace("https://", f"https://{token}@", 1)
 
         subprocess.run(
             ["git", "clone", "--depth", "50", clone_url, str(tmp / "repo")],
@@ -361,4 +392,49 @@ async def cancel_scan(
         raise e.to_http_exception()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to cancel scan: {str(e)}")
+
+
+@router.get("/")
+async def list_scans(
+    user=Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+):
+    trace_step("API endpoint: GET /scans/ (app/api/routes/scans.py)")
+    """
+    List scans visible to the current user.
+
+    Accessible to: All authenticated users — normal/premium users see only
+    their own scans, admins see every scan.
+    """
+    service = ScanService(db)
+    return await service.list_scans(user)
+
+
+@router.delete("/{scan_id}")
+async def delete_scan(
+    scan_id: str,
+    user=Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+):
+    trace_step("API endpoint: DELETE /scans/{scan_id} (app/api/routes/scans.py)")
+    """
+    Delete a scan and its stored results.
+
+    Accessible to: Scan owner or Admin
+    """
+    try:
+        scan = await db.scans.find_one({"scan_id": scan_id})
+        if not scan:
+            raise ResourceNotFoundException(f"Scan {scan_id} not found")
+
+        if not can_access_resource(user, str(scan.get("user_id"))):
+            raise AuthorizationException(f"Not authorized to delete scan {scan_id}")
+
+        service = ScanService(db)
+        await service.delete(scan_id)
+        return {"scan_id": scan_id, "status": "DELETED"}
+    except (ResourceNotFoundException, AuthorizationException) as e:
+        raise e.to_http_exception()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete scan: {str(e)}")
 
