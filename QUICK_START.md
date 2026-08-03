@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get the refactored Vulcan backend running in 5 minutes.
+Get the refactored ControlGate backend running in 5 minutes.
 
 ---
 
@@ -16,7 +16,7 @@ Get the refactored Vulcan backend running in 5 minutes.
 
 ```bash
 # Navigate to project
-cd d:\final\Vulcan\vulcan-backend
+cd d:\final\ControlGate\controlgate-backend
 
 # Copy environment template
 copy .env.template .env
@@ -42,7 +42,7 @@ docker-compose ps
 Expected output:
 ```
 NAME          STATUS
-vulcan-mongo  Up 2 seconds
+controlgate-mongo  Up 2 seconds
 ```
 
 ---
@@ -135,7 +135,7 @@ curl http://localhost:8000/api/v1/auth/me \
 ## 🔑 Key Credentials
 
 **Default Admin Account:**
-- Email: `admin@vulcan.ai`
+- Email: `admin@controlgate.ai`
 - Password: `admin123!`
 - Role: `admin` ✅
 
@@ -152,7 +152,7 @@ http://localhost:8000/docs
 
 ### Connect to MongoDB
 ```bash
-docker-compose exec mongo mongosh -u vulcan_user -p secure_password_here --authenticationDatabase admin
+docker-compose exec mongo mongosh -u controlgate_user -p secure_password_here --authenticationDatabase admin
 ```
 
 ### View Logs

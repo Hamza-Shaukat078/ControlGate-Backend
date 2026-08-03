@@ -1,4 +1,4 @@
-# Vulcan Backend — Complete Test Case Documentation
+# ControlGate Backend — Complete Test Case Documentation
 
 > **Total: 354 test functions · ~420 expanded instances (parametrized)**  
 > Run: `pytest tests/ -v` — all tests collected automatically.

@@ -11,7 +11,7 @@ Since you want containerization anyway, build and test in Docker where everythin
 ### Step 1: Build the Docker Image
 
 ```powershell
-docker build -t vulcan-backend .
+docker build -t controlgate-backend .
 ```
 
 This will:
@@ -22,7 +22,7 @@ This will:
 ### Step 2: Run the Container
 
 ```powershell
-docker run -it --rm vulcan-backend python examples/cpg_examples.py
+docker run -it --rm controlgate-backend python examples/cpg_examples.py
 ```
 
 This will run the CPG examples and show full output.
@@ -40,7 +40,7 @@ If you want to run natively on Windows:
 1. **Restart your computer** (VS Build Tools need this)
 2. After restart, open PowerShell and run:
    ```powershell
-   cd C:\Users\huzai\Desktop\fyp\Vulcan\vulcan-backend\vulcan-backend
+   cd C:\Users\huzai\Desktop\fyp\ControlGate\controlgate-backend\controlgate-backend
    .venv\Scripts\Activate.ps1
    pip install tree-sitter==0.21.3
    python setup_grammars.py
