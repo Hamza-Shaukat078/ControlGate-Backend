@@ -18,13 +18,14 @@ import pytest
 
 from app.domain.analysis.dast import session as session_module
 from app.domain.analysis.dast.checks import run_payload_checks
-from app.domain.analysis.dast.config import ActorConfig, DynamicScanConfig
+from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig
 from app.domain.analysis.dast.crawler import crawl
+from app.domain.analysis.dast.idor_probe import IdorProbeConfig, run_idor_probe
 from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
 from app.domain.analysis.dast.rule_loader import load_dynamic_queries
 from app.domain.analysis.dast.session import DastSession, DastSessionPair
 from app.domain.analysis.dast.verdict import Verdict
-from tests.fixtures.dast_vuln_server import VulnFixtureServer
+from tests.fixtures.dast_vuln_server import OWNER_BEARER_TOKEN, VulnFixtureServer
 
 RULES = load_dynamic_queries(Path(__file__).resolve().parents[2] / "queries" / "dynamic_queries.json")
 
@@ -149,3 +150,27 @@ class TestRaceProbeLive:
             )
 
         assert finding.verdict == Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+
+class TestIdorProbeLive:
+    def _pair(self, base_url):
+        config = DynamicScanConfig(
+            target_url=base_url,
+            actor=ActorConfig(auth_mode=AuthMode.BEARER, bearer_token=OWNER_BEARER_TOKEN),
+            second_actor=ActorConfig(auth_mode=AuthMode.BEARER, bearer_token="attacker-token"),
+        )
+        return DastSessionPair(config)
+
+    async def test_ownership_enforced_endpoint_passes(self, base_url):
+        async with self._pair(base_url) as pair:
+            finding = await run_idor_probe(
+                pair, IdorProbeConfig(scenario_id="IDOR_ORDER", owner_resource_url=base_url + "/orders/42"),
+            )
+        assert finding.verdict == Verdict.PASS
+
+    async def test_unenforced_endpoint_fails(self, base_url):
+        async with self._pair(base_url) as pair:
+            finding = await run_idor_probe(
+                pair, IdorProbeConfig(scenario_id="IDOR_PROFILE", owner_resource_url=base_url + "/profile/42"),
+            )
+        assert finding.verdict == Verdict.FAIL

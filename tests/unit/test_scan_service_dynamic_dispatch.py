@@ -411,3 +411,61 @@ class TestRaceProbeWiring:
              patch("app.domain.analysis.dast.race_probe.run_race_probe", run_race_probe_mock):
             await svc._run_dynamic_scan("scan-16", TARGET)
         run_race_probe_mock.assert_not_called()
+
+
+class TestIdorProbeWiring:
+    @pytest.mark.asyncio
+    async def test_idor_probe_is_built_and_run(self):
+        svc, db = await _make_service()
+        idor_finding = DynamicFinding(
+            control_id="V8.2.1", verdict=Verdict.FAIL, rule_id="IDOR_ORDER",
+            url=f"{TARGET}/orders/42", method="GET", note="second actor got 200", severity="high",
+        )
+        run_idor_probe_mock = AsyncMock(return_value=idor_finding)
+        await db.scans.insert_one({"scan_id": "scan-17", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.idor_probe.run_idor_probe", run_idor_probe_mock):
+            await svc._run_dynamic_scan(
+                "scan-17", TARGET,
+                dynamic_active_mode=True,
+                dynamic_idor_probes=[{
+                    "scenario_id": "IDOR_ORDER", "owner_resource_url": f"{TARGET}/orders/42",
+                }],
+            )
+
+        run_idor_probe_mock.assert_called_once()
+        called_config = run_idor_probe_mock.call_args.args[1]
+        assert called_config.scenario_id == "IDOR_ORDER"
+        assert called_config.owner_resource_url == f"{TARGET}/orders/42"
+
+        doc = await db.scans.find_one({"scan_id": "scan-17"})
+        findings = doc["summary"]["dynamic_findings"]
+        idor_result = next(f for f in findings if f["rule_id"] == "IDOR_ORDER")
+        assert idor_result["verdict"] == "fail"
+
+    @pytest.mark.asyncio
+    async def test_broken_idor_probe_config_does_not_abort_scan(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-18", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            # Missing required "owner_resource_url" — IdorProbeConfig(**idor_data) raises TypeError.
+            await svc._run_dynamic_scan(
+                "scan-18", TARGET, dynamic_idor_probes=[{"scenario_id": "BROKEN"}],
+            )
+        doc = await db.scans.find_one({"scan_id": "scan-18"})
+        assert doc["state"] == "COMPLETED"
+
+    @pytest.mark.asyncio
+    async def test_no_idor_probes_supplied_is_a_no_op(self):
+        svc, db = await _make_service()
+        run_idor_probe_mock = AsyncMock()
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.idor_probe.run_idor_probe", run_idor_probe_mock):
+            await svc._run_dynamic_scan("scan-19", TARGET)
+        run_idor_probe_mock.assert_not_called()

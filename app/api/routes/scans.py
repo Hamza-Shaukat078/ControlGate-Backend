@@ -184,6 +184,9 @@ async def start_scan(
             dynamic_race_probes=(
                 [p.model_dump() for p in payload.dynamic_race_probes] if payload.dynamic_race_probes else None
             ),
+            dynamic_idor_probes=(
+                [p.model_dump() for p in payload.dynamic_idor_probes] if payload.dynamic_idor_probes else None
+            ),
         )
         
         return ScanResponse(

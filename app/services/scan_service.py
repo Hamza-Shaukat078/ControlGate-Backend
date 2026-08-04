@@ -59,6 +59,7 @@ class ScanService:
         dynamic_second_actor_form_login: Optional[dict] = None,
         dynamic_scenarios: Optional[list[dict]] = None,
         dynamic_race_probes: Optional[list[dict]] = None,
+        dynamic_idor_probes: Optional[list[dict]] = None,
     ) -> tuple[str, str]:
         trace_step("Service: ScanService.start() (app/services/scan_service.py)")
         scan_id = f"scan-{uuid.uuid4().hex[:12]}"
@@ -104,6 +105,7 @@ class ScanService:
                 dynamic_auth_mode, dynamic_bearer_token, dynamic_form_login, dynamic_active_mode,
                 dynamic_second_actor_auth_mode, dynamic_second_actor_bearer_token,
                 dynamic_second_actor_form_login, dynamic_scenarios, dynamic_race_probes,
+                dynamic_idor_probes,
             ))
         elif code:
             trace_step("Dispatch: create_task(_run_direct_code_scan)")
@@ -133,6 +135,7 @@ class ScanService:
                     dynamic_second_actor_form_login,
                     dynamic_scenarios,
                     dynamic_race_probes,
+                    dynamic_idor_probes,
                 )
             )
 
@@ -613,6 +616,7 @@ class ScanService:
         dynamic_second_actor_form_login: Optional[dict] = None,
         dynamic_scenarios: Optional[list[dict]] = None,
         dynamic_race_probes: Optional[list[dict]] = None,
+        dynamic_idor_probes: Optional[list[dict]] = None,
         bridge_targets: Optional[list] = None,
     ) -> tuple[list[dict], list[dict]]:
         from app.domain.analysis.dast.api_scenario import build_scenario_from_request
@@ -620,6 +624,7 @@ class ScanService:
         from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig, FormLoginConfig
         from app.domain.analysis.dast.crawler import crawl
         from app.domain.analysis.dast.findings import DynamicFinding
+        from app.domain.analysis.dast.idor_probe import IdorProbeConfig, run_idor_probe
         from app.domain.analysis.dast.logout_discovery import (
             build_logout_invalidates_session_scenario,
             discover_logout_url,
@@ -745,6 +750,18 @@ class ScanService:
                             f"[scan:{scan_id}] Race probe "
                             f"'{race_data.get('scenario_id', '?')}' failed to run: {exc}"
                         )
+
+                for idor_data in (dynamic_idor_probes or []):
+                    try:
+                        idor_config = IdorProbeConfig(**idor_data)
+                        findings.append(
+                            await run_idor_probe(pair, idor_config, active_mode=dynamic_active_mode)
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"[scan:{scan_id}] IDOR probe "
+                            f"'{idor_data.get('scenario_id', '?')}' failed to run: {exc}"
+                        )
         except asyncio.TimeoutError:
             logger.warning(f"[scan:{scan_id}] Dynamic payload checks timed out for {target_url}")
         except Exception as exc:
@@ -777,6 +794,7 @@ class ScanService:
         dynamic_second_actor_form_login: Optional[dict] = None,
         dynamic_scenarios: Optional[list[dict]] = None,
         dynamic_race_probes: Optional[list[dict]] = None,
+        dynamic_idor_probes: Optional[list[dict]] = None,
     ):
         trace_step("Worker: _run_dynamic_scan() (app/services/scan_service.py)")
         start_time = time.time()
@@ -792,6 +810,7 @@ class ScanService:
                 scan_id, target_url, dynamic_auth_mode, dynamic_bearer_token, dynamic_form_login,
                 dynamic_active_mode, dynamic_second_actor_auth_mode, dynamic_second_actor_bearer_token,
                 dynamic_second_actor_form_login, dynamic_scenarios, dynamic_race_probes,
+                dynamic_idor_probes,
             )
 
             by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0}
@@ -865,6 +884,7 @@ class ScanService:
         dynamic_second_actor_form_login: Optional[dict] = None,
         dynamic_scenarios: Optional[list[dict]] = None,
         dynamic_race_probes: Optional[list[dict]] = None,
+        dynamic_idor_probes: Optional[list[dict]] = None,
     ):
         trace_step("Worker: _run_repository_scan() (app/services/scan_service.py)")
         start_time = time.time()
@@ -1046,7 +1066,7 @@ class ScanService:
                             scan_id, target_url, dynamic_auth_mode, dynamic_bearer_token,
                             dynamic_form_login, dynamic_active_mode, dynamic_second_actor_auth_mode,
                             dynamic_second_actor_bearer_token, dynamic_second_actor_form_login,
-                            dynamic_scenarios, dynamic_race_probes, bridge_targets,
+                            dynamic_scenarios, dynamic_race_probes, dynamic_idor_probes, bridge_targets,
                         ),
                         timeout=120.0,
                     )

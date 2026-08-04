@@ -25,6 +25,10 @@ _redeem_safe_state = {"safe_redeemed": False}
 
 _REDIRECT_PARAMS = ("url", "next", "redirect", "return", "continue", "dest", "target", "redirect_uri")
 
+# Bearer token the /orders/ route treats as "the owner" — any other value
+# (including a different, equally-valid-looking bearer token) gets denied.
+OWNER_BEARER_TOKEN = "owner-secret-token"
+
 
 class VulnHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -94,6 +98,22 @@ class VulnHandler(BaseHTTPRequestHandler):
                 self._send(200, b"root:x:0:0:root:/root:/bin/bash\n", content_type="text/plain")
                 return
             self._send(404, b"not found")
+            return
+
+        if path.startswith("/orders/"):
+            # Ownership enforced: only the bearer token that "owns" this
+            # resource gets it back, everyone else is denied.
+            auth = self.headers.get("Authorization", "")
+            if auth == f"Bearer {OWNER_BEARER_TOKEN}":
+                self._send(200, b'{"id": 42, "secret": "owner data"}', content_type="application/json")
+            else:
+                self._send(403, b"forbidden")
+            return
+
+        if path.startswith("/profile/"):
+            # Vulnerable on purpose: no ownership check at all — any bearer
+            # token (or none) gets the same resource back.
+            self._send(200, b'{"id": 42, "secret": "owner data"}', content_type="application/json")
             return
 
         self._send(404, b"not found")

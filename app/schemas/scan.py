@@ -126,6 +126,42 @@ class DynamicRaceProbeRequest(APIModel):
         return v
 
 
+class DynamicIdorProbeRequest(APIModel):
+    """V8.2.1 — has the primary actor request a resource it owns, then has
+    the second actor request the exact same URL. A 2xx for the second actor
+    means no ownership check gates the endpoint. Needs dynamic_second_actor_*
+    configured (same 'primary'/'secondary' vocabulary as race probes), not a
+    Scenario step because the two calls are actor-scoped, not sequential."""
+
+    scenario_id: str
+    asvs_controls: list[str] = Field(default_factory=lambda: ["V8.2.1"])
+    owner_resource_url: str
+    method: str = "GET"
+    params: Optional[dict] = None
+    data: Optional[dict] = None
+    headers: Optional[dict] = None
+    severity: str = "high"
+    # None => derive from method (GET/HEAD don't need it, mutating methods do) —
+    # matches IdorProbeConfig.resolved_requires_active_mode(). An explicit
+    # true/false here overrides that inference, same escape hatch the dataclass gives.
+    requires_active_mode: Optional[bool] = None
+
+    @field_validator('method')
+    @classmethod
+    def validate_method(cls, v):
+        allowed = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+        if v.upper() not in allowed:
+            raise ValueError(f"'method' must be one of {sorted(allowed)}")
+        return v.upper()
+
+    @field_validator('owner_resource_url')
+    @classmethod
+    def validate_url_scheme(cls, v):
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("'owner_resource_url' must start with http:// or https://")
+        return v
+
+
 class ScanStart(APIModel):
     # Direct code scan fields
     code: Optional[str] = Field(None, description="Direct code input (max 400 lines)")
@@ -207,6 +243,13 @@ class ScanStart(APIModel):
         None,
         description="User-supplied race/double-submit probes (V2.3.4) — fires N concurrent "
                     "requests at one endpoint and flags it if more succeed than expected.",
+    )
+    dynamic_idor_probes: Optional[list[DynamicIdorProbeRequest]] = Field(
+        None,
+        description="User-supplied cross-session IDOR/BOLA probes (V8.2.1) — the primary actor "
+                    "requests a resource it owns, the second actor requests the same URL, and a "
+                    "2xx for the second actor flags a missing ownership check. Requires "
+                    "dynamic_second_actor_auth_mode to be configured.",
     )
 
     @field_validator('target_url')

@@ -180,3 +180,49 @@ class TestDynamicRaceProbes:
     def test_defaults_to_none(self):
         s = ScanStart(code="print(1)", language="python")
         assert s.dynamic_race_probes is None
+
+
+class TestDynamicIdorProbes:
+    def test_minimal_idor_probe_is_valid(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_idor_probes=[{"scenario_id": "IDOR_ORDER", "owner_resource_url": f"{TARGET}/orders/42"}],
+        )
+        probe = s.dynamic_idor_probes[0]
+        assert probe.asvs_controls == ["V8.2.1"]
+        assert probe.method == "GET"
+        assert probe.requires_active_mode is None
+
+    def test_requires_active_mode_can_be_overridden_true(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_idor_probes=[{
+                "scenario_id": "X", "owner_resource_url": f"{TARGET}/x", "requires_active_mode": True,
+            }],
+        )
+        assert s.dynamic_idor_probes[0].requires_active_mode is True
+
+    def test_method_is_uppercased(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_idor_probes=[{"scenario_id": "X", "owner_resource_url": f"{TARGET}/x", "method": "delete"}],
+        )
+        assert s.dynamic_idor_probes[0].method == "DELETE"
+
+    def test_invalid_method_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_idor_probes=[{"scenario_id": "X", "owner_resource_url": f"{TARGET}/x", "method": "TRACE"}],
+            )
+
+    def test_url_must_be_http_or_https(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_idor_probes=[{"scenario_id": "X", "owner_resource_url": "ftp://target.example/x"}],
+            )
+
+    def test_defaults_to_none(self):
+        s = ScanStart(code="print(1)", language="python")
+        assert s.dynamic_idor_probes is None
