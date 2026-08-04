@@ -130,6 +130,34 @@ class ReportService:
         """Escape XML special chars for use inside Paragraph markup."""
         return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
+    @staticmethod
+    def _confirmation_label(vuln: dict) -> str:
+        """Distinguishes the two dynamic-confirmation tiers scan_service.py
+        sets on a static finding (see _run_repository_scan's hybrid block):
+        bridge_confirmed is precise (this exact route was re-tested live via
+        app/domain/analysis/dast/bridge.py), plain dynamic_confirmed is only
+        coarse correlation (some dynamic finding happened to share the same
+        ASVS control). Reporting them identically would overstate the
+        coarse tier's confidence."""
+        if vuln.get('bridge_confirmed'):
+            return "Confirmed live — this exact route was re-tested and reproduced"
+        if vuln.get('dynamic_confirmed'):
+            return "Corroborated — the dynamic scan flagged the same ASVS control elsewhere"
+        return ""
+
+    @staticmethod
+    def _bridge_origin_label(finding: dict) -> str:
+        """A bridge-originated dynamic finding's evidence is tagged
+        'bridge:<static_finding_id>:<source_file>:<source_line>' by
+        scan_service._run_dynamic_checks — surface the file:line it re-tested."""
+        evidence = finding.get('evidence') or ''
+        if not evidence.startswith('bridge:'):
+            return ""
+        parts = evidence.split(':', 3)
+        if len(parts) < 4:
+            return ""
+        return f"Re-test of the static finding at {parts[2]}:{parts[3]}"
+
     async def export_pdf(self, scan_id: str, user: dict) -> Optional[bytes]:
         """Generate PDF report for a scan"""
         if not REPORTLAB_AVAILABLE:
@@ -231,6 +259,36 @@ class ReportService:
             story.append(severity_table)
             story.append(Spacer(1, 0.3 * inch))
 
+            # Live Confirmation Summary — only meaningful for hybrid scans
+            # (dynamic_findings present); tells the reader up front how many
+            # static findings were actually re-tested live vs. only
+            # correlated by shared ASVS control, before they read the detail
+            # sections below.
+            if summary.vulnerabilities:
+                bridge_confirmed_count = sum(
+                    1 for v in summary.vulnerabilities if v.get('bridge_confirmed')
+                )
+                coarse_confirmed_count = sum(
+                    1 for v in summary.vulnerabilities
+                    if v.get('dynamic_confirmed') and not v.get('bridge_confirmed')
+                )
+                if bridge_confirmed_count or coarse_confirmed_count:
+                    story.append(Paragraph("Live Confirmation Summary", styles['Heading2']))
+                    story.append(Spacer(1, 0.1 * inch))
+                    confirm_text = ""
+                    if bridge_confirmed_count:
+                        confirm_text += (
+                            f"<b>{bridge_confirmed_count}</b> finding(s) confirmed live "
+                            f"— exact route re-tested and reproduced<br/>"
+                        )
+                    if coarse_confirmed_count:
+                        confirm_text += (
+                            f"<b>{coarse_confirmed_count}</b> finding(s) corroborated "
+                            f"— dynamic scan flagged the same ASVS control elsewhere<br/>"
+                        )
+                    story.append(Paragraph(confirm_text, styles['Normal']))
+                    story.append(Spacer(1, 0.2 * inch))
+
             # Vulnerabilities Details
             if summary.vulnerabilities:
                 story.append(Paragraph("Vulnerability Details", styles['Heading2']))
@@ -260,6 +318,9 @@ class ReportService:
                     info_text += f"<b>CWE:</b> {xe(vuln.get('cwe', 'N/A'))}<br/>"
                     info_text += f"<b>OWASP:</b> {xe(vuln.get('owasp', 'N/A'))}<br/>"
                     info_text += f"<b>Confidence:</b> {confidence_pct}<br/>"
+                    confirmation = self._confirmation_label(vuln)
+                    if confirmation:
+                        info_text += f"<b>Dynamic Confirmation:</b> {xe(confirmation)}<br/>"
                     story.append(Paragraph(info_text, styles['Normal']))
                     story.append(Spacer(1, 0.1 * inch))
 
@@ -403,6 +464,13 @@ class ReportService:
                     info_text = f"<b>URL:</b> {xe(finding.get('url', 'N/A'))}<br/>"
                     info_text += f"<b>Method:</b> {xe(finding.get('method', 'N/A'))}<br/>"
                     info_text += f"<b>Note:</b> {xe(finding.get('note', 'N/A'))}<br/>"
+                    bridge_origin = self._bridge_origin_label(finding)
+                    if bridge_origin:
+                        info_text += f"<b>Origin:</b> {xe(bridge_origin)}<br/>"
+                    elif finding.get('corroborates_static_finding'):
+                        info_text += (
+                            "<b>Corroborates:</b> A static finding flagged the same ASVS control<br/>"
+                        )
                     story.append(Paragraph(info_text, styles['Normal']))
                     story.append(Spacer(1, 0.2 * inch))
 
@@ -437,7 +505,7 @@ class ReportService:
         writer = csv.writer(output)
 
         # Header
-        writer.writerow(['Type', 'Severity', 'File', 'Line', 'Message', 'CWE'])
+        writer.writerow(['Type', 'Severity', 'File', 'Line', 'Message', 'CWE', 'Confirmation'])
 
         # Vulnerabilities
         for vuln in summary.vulnerabilities or []:
@@ -447,12 +515,19 @@ class ReportService:
                 vuln.get('file', 'N/A'),
                 vuln.get('line', 'N/A'),
                 vuln.get('message', 'No description'),
-                vuln.get('cwe', '')
+                vuln.get('cwe', ''),
+                self._confirmation_label(vuln),
             ])
 
         # Dynamic (DAST) findings — HTTP-shaped, not file/line-shaped, so
         # File/Line hold the URL and verdict respectively for this row type.
         for finding in summary.dynamic_findings or []:
+            bridge_origin = self._bridge_origin_label(finding)
+            confirmation = (
+                bridge_origin if bridge_origin
+                else "Corroborates static finding" if finding.get('corroborates_static_finding')
+                else ""
+            )
             writer.writerow([
                 finding.get('rule_id', 'Unknown'),
                 finding.get('verdict', 'unknown').upper(),
@@ -460,6 +535,7 @@ class ReportService:
                 finding.get('method', 'N/A'),
                 finding.get('note', 'No description'),
                 '',
+                confirmation,
             ])
 
         return output.getvalue()
