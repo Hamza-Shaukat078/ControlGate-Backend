@@ -4,7 +4,7 @@ import tempfile
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from typing import Dict, Any, Optional
 from pathlib import Path
@@ -72,7 +72,7 @@ class ScanService:
         if not object_id:
             raise ValueError("Invalid user_id")
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         scan_doc: Dict[str, Any] = {
             "scan_id": scan_id,
             "user_id": object_id,
@@ -452,13 +452,13 @@ class ScanService:
             {"scan_id": scan_id},
             {
                 "$push": {"logs": {"$each": logs}},
-                "$set": {"updated_at": datetime.utcnow()},
+                "$set": {"updated_at": datetime.now(timezone.utc).replace(tzinfo=None)},
             },
         )
 
     # Updates scan fields and optionally appends log lines in a single atomic write
     async def _update_scan(self, scan_id: str, updates: Dict[str, Any], logs: Optional[list[str]] = None) -> None:
-        update_doc: Dict[str, Any] = {"$set": {**updates, "updated_at": datetime.utcnow()}}
+        update_doc: Dict[str, Any] = {"$set": {**updates, "updated_at": datetime.now(timezone.utc).replace(tzinfo=None)}}
         if logs:
             update_doc["$push"] = {"logs": {"$each": logs}}
         await self.db.scans.update_one({"scan_id": scan_id}, update_doc)
@@ -477,7 +477,7 @@ class ScanService:
         try:
             await self._update_scan(
                 scan_id,
-                {"state": "RUNNING", "started_at": datetime.utcnow().isoformat(), "progress": 10},
+                {"state": "RUNNING", "started_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), "progress": 10},
                 ["[INFO] Starting direct code scan"],
             )
 
@@ -550,8 +550,8 @@ class ScanService:
                     "vulnerabilities_found": len(vulnerabilities),
                     "by_severity": by_severity,
                     "duration_seconds": round(duration, 2),
-                    "created_at": datetime.utcnow().isoformat(),
-                    "completed_at": datetime.utcnow().isoformat(),
+                    "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                    "completed_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                     "vulnerabilities": vulnerabilities,
                 }
 
@@ -564,7 +564,7 @@ class ScanService:
                     {
                         "state": "COMPLETED",
                         "progress": 100,
-                        "finished_at": datetime.utcnow().isoformat(),
+                        "finished_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                         "summary": summary,
                         "vulnerabilities": vulnerabilities,
                         "files_scanned": 1,
@@ -597,7 +597,7 @@ class ScanService:
                 scan_id,
                 {
                     "state": "FAILED",
-                    "finished_at": datetime.utcnow().isoformat(),
+                    "finished_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                     "summary": {"scan_id": scan_id, "status": "FAILED", "error": str(e)},
                 },
                 [f"[ERROR] Scan failed: {str(e)}"],
@@ -918,7 +918,7 @@ class ScanService:
             validate_public_http_url(target_url, allow_http=True)
             await self._update_scan(
                 scan_id,
-                {"state": "RUNNING", "started_at": datetime.utcnow().isoformat(), "progress": 10},
+                {"state": "RUNNING", "started_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), "progress": 10},
                 [f"[INFO] Starting dynamic scan against {target_url}"],
             )
 
@@ -946,8 +946,8 @@ class ScanService:
                 "vulnerabilities_found": fail_count,
                 "by_severity": by_severity,
                 "duration_seconds": round(duration, 2),
-                "created_at": datetime.utcnow().isoformat(),
-                "completed_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                "completed_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                 "vulnerabilities": [],
                 "dynamic_findings": dynamic_findings,
                 "discovered_forms": discovered_forms,
@@ -957,7 +957,7 @@ class ScanService:
                 {
                     "state": "COMPLETED",
                     "progress": 100,
-                    "finished_at": datetime.utcnow().isoformat(),
+                    "finished_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                     "summary": summary,
                     "vulnerabilities": [],
                 },
@@ -972,7 +972,7 @@ class ScanService:
                 scan_id,
                 {
                     "state": "FAILED",
-                    "finished_at": datetime.utcnow().isoformat(),
+                    "finished_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                     "summary": {"scan_id": scan_id, "status": "FAILED", "error": str(e)},
                 },
                 [f"[ERROR] Scan failed: {str(e)}"],
@@ -1011,7 +1011,7 @@ class ScanService:
         try:
             await self._update_scan(
                 scan_id,
-                {"state": "RUNNING", "started_at": datetime.utcnow().isoformat(), "progress": 5},
+                {"state": "RUNNING", "started_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), "progress": 5},
                 ["[INFO] Starting repository scan"],
             )
 
@@ -1061,8 +1061,8 @@ class ScanService:
                     "vulnerabilities_found": 0,
                     "by_severity": {"critical": 0, "high": 0, "medium": 0, "low": 0},
                     "duration_seconds": round(duration, 2),
-                    "created_at": datetime.utcnow().isoformat(),
-                    "completed_at": datetime.utcnow().isoformat(),
+                    "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                    "completed_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                     "error": "No scannable files found for the selected scope.",
                 }
                 await self._update_scan(
@@ -1070,7 +1070,7 @@ class ScanService:
                     {
                         "state": "FAILED",
                         "progress": 100,
-                        "finished_at": datetime.utcnow().isoformat(),
+                        "finished_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                         "summary": summary,
                         "vulnerabilities": [],
                         "files_scanned": 0,
@@ -1245,8 +1245,8 @@ class ScanService:
                 ),
                 "by_severity": by_severity,
                 "duration_seconds": round(duration, 2),
-                "created_at": datetime.utcnow().isoformat(),
-                "completed_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                "completed_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                 "vulnerabilities": vulnerabilities,
                 "scanned_files": list(file_map.values()),
                 "config_findings": repo_result.config_findings,
@@ -1263,7 +1263,7 @@ class ScanService:
                 {
                     "state": "COMPLETED",
                     "progress": 100,
-                    "finished_at": datetime.utcnow().isoformat(),
+                    "finished_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                     "summary": summary,
                     "vulnerabilities": vulnerabilities,
                     "graph_data": {"file_map": file_map, "file_order": file_order},
@@ -1285,7 +1285,7 @@ class ScanService:
                 scan_id,
                 {
                     "state": "FAILED",
-                    "finished_at": datetime.utcnow().isoformat(),
+                    "finished_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                     "summary": {"scan_id": scan_id, "status": "FAILED", "error": str(e)},
                 },
                 [f"[ERROR] Scan failed: {str(e)}"],
@@ -1376,7 +1376,7 @@ class ScanService:
             return {"state": "NOT_FOUND"}
         await self._update_scan(
             scan_id,
-            {"state": "CANCELLED", "finished_at": datetime.utcnow().isoformat()},
+            {"state": "CANCELLED", "finished_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat()},
             ["[INFO] Scan cancelled by user"],
         )
         return {"state": "CANCELLED"}

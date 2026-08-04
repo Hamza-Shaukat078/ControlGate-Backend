@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.db.mongo import to_object_id
 from app.enums.role import UserRole
@@ -18,7 +18,7 @@ class NotificationService:
         items = []
         for scan in scans:
             status = scan.get("state", "UNKNOWN")
-            created_at = scan.get("created_at") or datetime.utcnow()
+            created_at = scan.get("created_at") or datetime.now(timezone.utc).replace(tzinfo=None)
             items.append(
                 {
                     "id": scan.get("scan_id"),

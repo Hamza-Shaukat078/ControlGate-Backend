@@ -3,7 +3,7 @@ Role-based permission system.
 Provides decorators and utilities for role-based access control.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import Depends, HTTPException, status
 from functools import wraps
 from app.enums.role import UserRole
@@ -111,7 +111,7 @@ async def check_scan_quota(user: dict, db) -> None:
         return
 
     # Count scans started by this user since midnight today (UTC)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     midnight = datetime(now.year, now.month, now.day, 0, 0, 0)
 
     from app.db.mongo import to_object_id

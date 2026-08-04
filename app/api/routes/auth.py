@@ -148,7 +148,7 @@ async def update_me(
     if not updates:
         return user
 
-    updates["updated_at"] = datetime.utcnow()
+    updates["updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
     object_id = to_object_id(user.get("id", ""))
     if not object_id:
         raise HTTPException(status_code=400, detail="Invalid user id")

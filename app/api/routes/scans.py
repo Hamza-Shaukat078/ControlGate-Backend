@@ -10,7 +10,7 @@ from app.services.scan_service import ScanService
 from app.services.repository_service import RepositoryService
 from app.core.permissions import can_access_resource, check_scan_quota
 from app.core.exceptions import AuthorizationException, ResourceNotFoundException
-from datetime import datetime
+from datetime import datetime, timezone
 from app.core.trace import trace_step
 from app.core.crypto import decrypt_secret
 from app.core.network import validate_public_git_url, validate_public_http_url
@@ -198,7 +198,7 @@ async def start_scan(
             status="PENDING",
             message="Scan initiated successfully",
             input_type=input_type,
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         )
     except HTTPException:
         raise

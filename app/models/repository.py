@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import String, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -16,4 +16,4 @@ class Repository(Base):
     owner_user_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="CONNECTED")
     default_branch: Mapped[str] = mapped_column(String(128), default="main")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))

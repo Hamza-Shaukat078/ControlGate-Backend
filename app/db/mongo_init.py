@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.core.security import get_password_hash
@@ -57,7 +57,7 @@ async def seed_admin() -> None:
     if settings.ENV.lower() not in {"dev", "development", "local", "test"} and settings.DEFAULT_ADMIN_PASSWORD == "admin123!":
         raise RuntimeError("Refusing to seed a default admin with a weak production password")
     
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.users.insert_one(
         {
             "email": settings.DEFAULT_ADMIN_EMAIL,

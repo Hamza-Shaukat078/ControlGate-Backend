@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import secrets
 from typing import Optional
@@ -54,7 +54,7 @@ class AuthService:
         if role not in valid_roles:
             raise ValueError(f"Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}")
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         user_doc = {
             "email": email,
             "hashed_password": get_password_hash(password),
@@ -141,7 +141,7 @@ class AuthService:
         google_sub: str,
     ) -> dict:
         user = await db.users.find_one({"email": email})
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         if user:
             await db.users.update_one(
                 {"_id": user["_id"]},
@@ -179,7 +179,7 @@ class AuthService:
         github_id: str,
     ) -> dict:
         user = await db.users.find_one({"email": email})
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         if user:
             await db.users.update_one(
                 {"_id": user["_id"]},
@@ -216,7 +216,7 @@ class AuthService:
 
         token = secrets.token_urlsafe(32)
         token_hash = self._hash_reset_token(token)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         expires_at = now + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
 
         await db.password_resets.insert_one(
@@ -246,7 +246,7 @@ class AuthService:
         await email_service.send_email(user.get("email"), subject, body_text, body_html)
 
     async def reset_password(self, db: AsyncIOMotorDatabase, token: str, new_password: str) -> None:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         token_hash = self._hash_reset_token(token)
         reset_doc = await db.password_resets.find_one(
             {
@@ -265,7 +265,7 @@ class AuthService:
         await db.password_resets.update_one({"_id": reset_doc["_id"]}, {"$set": {"used_at": now}})
 
     async def validate_reset_token(self, db: AsyncIOMotorDatabase, token: str) -> bool:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         token_hash = self._hash_reset_token(token)
         reset_doc = await db.password_resets.find_one(
             {
