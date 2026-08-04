@@ -226,3 +226,33 @@ class TestDynamicIdorProbes:
     def test_defaults_to_none(self):
         s = ScanStart(code="print(1)", language="python")
         assert s.dynamic_idor_probes is None
+
+
+class TestCrawlScopeAndRuleSelection:
+    def test_valid_overrides_are_accepted(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_crawl_max_pages=25, dynamic_crawl_max_depth=4,
+            dynamic_rule_ids=["OPEN_REDIRECT_LIVE", "CSRF_TOKEN_NOT_VALIDATED"],
+        )
+        assert s.dynamic_crawl_max_pages == 25
+        assert s.dynamic_crawl_max_depth == 4
+        assert s.dynamic_rule_ids == ["OPEN_REDIRECT_LIVE", "CSRF_TOKEN_NOT_VALIDATED"]
+
+    def test_max_pages_out_of_range_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_crawl_max_pages=0)
+        with pytest.raises(ValidationError):
+            ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_crawl_max_pages=101)
+
+    def test_max_depth_out_of_range_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_crawl_max_depth=-1)
+        with pytest.raises(ValidationError):
+            ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_crawl_max_depth=6)
+
+    def test_defaults_to_none(self):
+        s = ScanStart(code="print(1)", language="python")
+        assert s.dynamic_crawl_max_pages is None
+        assert s.dynamic_crawl_max_depth is None
+        assert s.dynamic_rule_ids is None

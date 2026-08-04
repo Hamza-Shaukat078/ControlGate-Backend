@@ -542,3 +542,63 @@ class TestStoredXssProbeWiring:
             await svc._run_dynamic_scan("scan-22", TARGET, dynamic_active_mode=True)
 
         assert run_xss_probe_mock.await_count == 5
+
+
+class TestCrawlScopeAndRuleSelectionWiring:
+    """Phase 5 — dynamic_crawl_max_pages/dynamic_crawl_max_depth/dynamic_rule_ids
+    on ScanStart, threaded through to crawl() and run_payload_checks()."""
+
+    @pytest.mark.asyncio
+    async def test_crawl_overrides_are_passed_through(self):
+        svc, db = await _make_service()
+        crawl_mock = AsyncMock(return_value=CrawlResult(urls=[TARGET], forms=[]))
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", crawl_mock), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            await svc._run_dynamic_scan(
+                "scan-23", TARGET, dynamic_crawl_max_pages=25, dynamic_crawl_max_depth=4,
+            )
+
+        crawl_mock.assert_awaited_once()
+        assert crawl_mock.await_args.kwargs == {"max_pages": 25, "max_depth": 4}
+
+    @pytest.mark.asyncio
+    async def test_no_crawl_overrides_leaves_crawler_defaults_untouched(self):
+        svc, db = await _make_service()
+        crawl_mock = AsyncMock(return_value=CrawlResult(urls=[TARGET], forms=[]))
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", crawl_mock), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            await svc._run_dynamic_scan("scan-24", TARGET)
+
+        assert crawl_mock.await_args.kwargs == {}
+
+    @pytest.mark.asyncio
+    async def test_rule_ids_filter_which_rules_are_passed(self):
+        svc, db = await _make_service()
+        run_payload_checks_mock = AsyncMock(return_value=[])
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", run_payload_checks_mock), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            await svc._run_dynamic_scan(
+                "scan-25", TARGET, dynamic_rule_ids=["OPEN_REDIRECT_LIVE", "NOT_A_REAL_RULE"],
+            )
+
+        run_payload_checks_mock.assert_awaited_once()
+        passed_rules = run_payload_checks_mock.await_args.kwargs["rules"]
+        assert set(passed_rules.keys()) == {"OPEN_REDIRECT_LIVE"}
+
+    @pytest.mark.asyncio
+    async def test_no_rule_ids_runs_full_default_set(self):
+        svc, db = await _make_service()
+        run_payload_checks_mock = AsyncMock(return_value=[])
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", run_payload_checks_mock), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            await svc._run_dynamic_scan("scan-26", TARGET)
+
+        assert run_payload_checks_mock.await_args.kwargs["rules"] is None

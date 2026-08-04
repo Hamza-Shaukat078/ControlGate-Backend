@@ -60,6 +60,9 @@ class ScanService:
         dynamic_scenarios: Optional[list[dict]] = None,
         dynamic_race_probes: Optional[list[dict]] = None,
         dynamic_idor_probes: Optional[list[dict]] = None,
+        dynamic_crawl_max_pages: Optional[int] = None,
+        dynamic_crawl_max_depth: Optional[int] = None,
+        dynamic_rule_ids: Optional[list[str]] = None,
     ) -> tuple[str, str]:
         trace_step("Service: ScanService.start() (app/services/scan_service.py)")
         scan_id = f"scan-{uuid.uuid4().hex[:12]}"
@@ -105,7 +108,7 @@ class ScanService:
                 dynamic_auth_mode, dynamic_bearer_token, dynamic_form_login, dynamic_active_mode,
                 dynamic_second_actor_auth_mode, dynamic_second_actor_bearer_token,
                 dynamic_second_actor_form_login, dynamic_scenarios, dynamic_race_probes,
-                dynamic_idor_probes,
+                dynamic_idor_probes, dynamic_crawl_max_pages, dynamic_crawl_max_depth, dynamic_rule_ids,
             ))
         elif code:
             trace_step("Dispatch: create_task(_run_direct_code_scan)")
@@ -136,6 +139,9 @@ class ScanService:
                     dynamic_scenarios,
                     dynamic_race_probes,
                     dynamic_idor_probes,
+                    dynamic_crawl_max_pages,
+                    dynamic_crawl_max_depth,
+                    dynamic_rule_ids,
                 )
             )
 
@@ -617,6 +623,9 @@ class ScanService:
         dynamic_scenarios: Optional[list[dict]] = None,
         dynamic_race_probes: Optional[list[dict]] = None,
         dynamic_idor_probes: Optional[list[dict]] = None,
+        dynamic_crawl_max_pages: Optional[int] = None,
+        dynamic_crawl_max_depth: Optional[int] = None,
+        dynamic_rule_ids: Optional[list[str]] = None,
         bridge_targets: Optional[list] = None,
     ) -> tuple[list[dict], list[dict]]:
         from app.domain.analysis.dast.api_scenario import build_scenario_from_request
@@ -662,6 +671,21 @@ class ScanService:
             active_mode=dynamic_active_mode,
         )
 
+        # None means "use crawl()'s own defaults" — only pass overrides that were
+        # actually supplied so a scan that doesn't set these behaves exactly as
+        # before this option existed.
+        crawl_kwargs: Dict[str, Any] = {}
+        if dynamic_crawl_max_pages is not None:
+            crawl_kwargs["max_pages"] = dynamic_crawl_max_pages
+        if dynamic_crawl_max_depth is not None:
+            crawl_kwargs["max_depth"] = dynamic_crawl_max_depth
+
+        selected_rules = None
+        if dynamic_rule_ids:
+            selected_rules = {
+                rule_id: rule for rule_id, rule in load_dynamic_queries().items() if rule_id in dynamic_rule_ids
+            }
+
         findings = []
         discovered_forms: list[dict] = []
         discovered_form_objects: list = []
@@ -670,7 +694,7 @@ class ScanService:
                 check_urls = [target_url]
                 try:
                     crawl_result = await asyncio.wait_for(
-                        crawl(pair.primary, target_url), timeout=30.0,
+                        crawl(pair.primary, target_url, **crawl_kwargs), timeout=30.0,
                     )
                     discovered_forms = [asdict(f) for f in crawl_result.forms]
                     discovered_form_objects = crawl_result.forms
@@ -682,7 +706,9 @@ class ScanService:
                     logger.warning(f"[scan:{scan_id}] Crawler failed (non-blocking): {exc}")
 
                 findings = await asyncio.wait_for(
-                    run_payload_checks(pair.primary, check_urls, active_mode=dynamic_active_mode),
+                    run_payload_checks(
+                        pair.primary, check_urls, rules=selected_rules, active_mode=dynamic_active_mode,
+                    ),
                     timeout=60.0,
                 )
 
@@ -821,6 +847,9 @@ class ScanService:
         dynamic_scenarios: Optional[list[dict]] = None,
         dynamic_race_probes: Optional[list[dict]] = None,
         dynamic_idor_probes: Optional[list[dict]] = None,
+        dynamic_crawl_max_pages: Optional[int] = None,
+        dynamic_crawl_max_depth: Optional[int] = None,
+        dynamic_rule_ids: Optional[list[str]] = None,
     ):
         trace_step("Worker: _run_dynamic_scan() (app/services/scan_service.py)")
         start_time = time.time()
@@ -836,7 +865,7 @@ class ScanService:
                 scan_id, target_url, dynamic_auth_mode, dynamic_bearer_token, dynamic_form_login,
                 dynamic_active_mode, dynamic_second_actor_auth_mode, dynamic_second_actor_bearer_token,
                 dynamic_second_actor_form_login, dynamic_scenarios, dynamic_race_probes,
-                dynamic_idor_probes,
+                dynamic_idor_probes, dynamic_crawl_max_pages, dynamic_crawl_max_depth, dynamic_rule_ids,
             )
 
             by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0}
@@ -911,6 +940,9 @@ class ScanService:
         dynamic_scenarios: Optional[list[dict]] = None,
         dynamic_race_probes: Optional[list[dict]] = None,
         dynamic_idor_probes: Optional[list[dict]] = None,
+        dynamic_crawl_max_pages: Optional[int] = None,
+        dynamic_crawl_max_depth: Optional[int] = None,
+        dynamic_rule_ids: Optional[list[str]] = None,
     ):
         trace_step("Worker: _run_repository_scan() (app/services/scan_service.py)")
         start_time = time.time()
@@ -1092,7 +1124,8 @@ class ScanService:
                             scan_id, target_url, dynamic_auth_mode, dynamic_bearer_token,
                             dynamic_form_login, dynamic_active_mode, dynamic_second_actor_auth_mode,
                             dynamic_second_actor_bearer_token, dynamic_second_actor_form_login,
-                            dynamic_scenarios, dynamic_race_probes, dynamic_idor_probes, bridge_targets,
+                            dynamic_scenarios, dynamic_race_probes, dynamic_idor_probes,
+                            dynamic_crawl_max_pages, dynamic_crawl_max_depth, dynamic_rule_ids, bridge_targets,
                         ),
                         timeout=120.0,
                     )

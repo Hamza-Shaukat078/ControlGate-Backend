@@ -251,6 +251,22 @@ class ScanStart(APIModel):
                     "2xx for the second actor flags a missing ownership check. Requires "
                     "dynamic_second_actor_auth_mode to be configured.",
     )
+    dynamic_crawl_max_pages: Optional[int] = Field(
+        None, ge=1, le=100,
+        description="Override the crawler's default page-visit cap (10) for dynamic/hybrid scans. "
+                    "Raise for larger target apps where the default under-discovers routes/forms.",
+    )
+    dynamic_crawl_max_depth: Optional[int] = Field(
+        None, ge=0, le=5,
+        description="Override the crawler's default link-following depth (2) for dynamic/hybrid scans.",
+    )
+    dynamic_rule_ids: Optional[list[str]] = Field(
+        None,
+        description="Restrict which payload-check rule_ids (e.g. 'OPEN_REDIRECT_LIVE', "
+                    "'CSRF_TOKEN_NOT_VALIDATED') run against crawled/target URLs. Omit to run all of "
+                    "them. Unknown rule_ids are silently ignored, same tolerance as a typo'd "
+                    "dynamic_race_probes/dynamic_scenarios scenario_id.",
+    )
 
     @field_validator('target_url')
     @classmethod

@@ -187,6 +187,9 @@ async def start_scan(
             dynamic_idor_probes=(
                 [p.model_dump() for p in payload.dynamic_idor_probes] if payload.dynamic_idor_probes else None
             ),
+            dynamic_crawl_max_pages=payload.dynamic_crawl_max_pages,
+            dynamic_crawl_max_depth=payload.dynamic_crawl_max_depth,
+            dynamic_rule_ids=payload.dynamic_rule_ids,
         )
         
         return ScanResponse(
