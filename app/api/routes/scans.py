@@ -162,11 +162,28 @@ async def start_scan(
             repo_id=payload.repo_id,
             branch=payload.branch,
             scan_mode=payload.scan_mode.value,
+            scan_type=payload.scan_type.value,
             repo_url=repo_url,
             repo_provider=repo_provider,
             repo_token=repo_token,
             file_paths=payload.file_paths,
             target_url=payload.target_url,
+            dynamic_auth_mode=payload.dynamic_auth_mode.value,
+            dynamic_bearer_token=payload.dynamic_bearer_token,
+            dynamic_form_login=payload.dynamic_form_login.model_dump() if payload.dynamic_form_login else None,
+            dynamic_active_mode=payload.dynamic_active_mode,
+            dynamic_second_actor_auth_mode=payload.dynamic_second_actor_auth_mode.value,
+            dynamic_second_actor_bearer_token=payload.dynamic_second_actor_bearer_token,
+            dynamic_second_actor_form_login=(
+                payload.dynamic_second_actor_form_login.model_dump()
+                if payload.dynamic_second_actor_form_login else None
+            ),
+            dynamic_scenarios=(
+                [s.model_dump() for s in payload.dynamic_scenarios] if payload.dynamic_scenarios else None
+            ),
+            dynamic_race_probes=(
+                [p.model_dump() for p in payload.dynamic_race_probes] if payload.dynamic_race_probes else None
+            ),
         )
         
         return ScanResponse(

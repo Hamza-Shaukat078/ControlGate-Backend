@@ -1,0 +1,40 @@
+{
+  "DOUBLE_DECODE_BYPASS": {
+    "check_type": "payload",
+    "asvs_controls": ["V1.1.1"],
+    "owasp": "A03:2021-Injection",
+    "cwe": "CWE-172",
+    "severity": "medium",
+    "description": "Compares live server behavior on a singly-encoded vs. double-encoded path-traversal-style payload. A discrepancy (double-encoded request gets further than the single-encoded one) is evidence the input is decoded/canonicalized more than once before validation.",
+    "single_encoded_suffix": "/%2e%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd",
+    "double_encoded_suffix": "/%252e%252e/%252e%252e/%252e%252e/%252e%252e/etc/passwd"
+  },
+  "CRLF_HEADER_REFLECTION": {
+    "check_type": "payload",
+    "asvs_controls": ["V4.2.4"],
+    "owasp": "A03:2021-Injection",
+    "cwe": "CWE-93",
+    "severity": "high",
+    "description": "Injects an encoded CRLF sequence plus a marker header name/value into common redirect/reflection query parameters and checks whether the marker comes back as a literal response header. This is a reflection-based approximation of V4.2.4 (app-level header injection), not a protocol-level HTTP/2/3 frame-validation test.",
+    "candidate_params": ["url", "next", "redirect", "return", "continue", "dest", "target", "redirect_uri"]
+  },
+  "OPEN_REDIRECT_LIVE": {
+    "check_type": "payload",
+    "asvs_controls": ["V3.7.2"],
+    "owasp": "A01:2021-Broken Access Control",
+    "cwe": "CWE-601",
+    "severity": "medium",
+    "description": "Confirms, against the live target, whether common redirect/callback query parameters — or a forged Host header — drive an unvalidated external redirect. Live-exploitability check for the same control the static UNVALIDATED_REDIRECT taint rule flags at the source level.",
+    "candidate_params": ["url", "next", "redirect", "return", "continue", "dest", "target", "redirect_uri"],
+    "canary_domain": "dast-redirect-canary.invalid"
+  },
+  "REQUEST_SMUGGLING": {
+    "check_type": "payload",
+    "asvs_controls": ["V4.2.2"],
+    "owasp": "A05:2021-Security Misconfiguration",
+    "cwe": "CWE-444",
+    "severity": "critical",
+    "requires_active_mode": true,
+    "description": "Sends a request with an ambiguous Content-Length/Transfer-Encoding combination immediately followed by a distinctly-marked second request on the same connection, then checks whether the marker leaks into the first response — evidence the front-end/back-end chain disagrees on request framing. Best-effort indicator, not a full exploit chain. Gated behind active_mode: a real desync can affect other users' traffic on shared infrastructure, unlike this engine's other checks."
+  }
+}

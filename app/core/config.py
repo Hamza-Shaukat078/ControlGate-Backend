@@ -71,6 +71,13 @@ class Settings(BaseSettings):
 
     SENDGRID_API_KEY: str = Field(default="")
 
+    # Optional — https://nvd.nist.gov/developers/request-an-api-key. Without
+    # it, NVD CVE-enrichment lookups (app/services/nvd_client.py) are
+    # rate-limited to 5 req/30s instead of 50 req/30s and enrich fewer CVEs
+    # per scan within the same timeout budget. Never required for the scan
+    # to function — just how many CVEs get an authoritative CVSS score.
+    NVD_API_KEY: str = Field(default="")
+
     GOOGLE_OAUTH_CLIENT_ID: str = Field(default="")
     GOOGLE_OAUTH_CLIENT_SECRET: str = Field(default="")
     GOOGLE_OAUTH_REDIRECT_URI: str = Field(default="http://localhost:8000/api/v1/auth/oauth/google/callback")

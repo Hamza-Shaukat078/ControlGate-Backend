@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 MAX_DEPENDENCY_PACKAGES = 150
 DEPENDENCY_SCAN_TIMEOUT_SECONDS = 20
 
+# NVD CVE enrichment — separately bounded from the OSV query above: NVD's
+# rate limit forces sequential, paced requests (see nvd_client.py), so this
+# is inherently slower per-item than OSV's concurrent query.
+NVD_MAX_CVE_LOOKUPS = 10
+NVD_ENRICHMENT_TIMEOUT_SECONDS = 75
+
 
 # ── Shared "is this the same finding" logic ───────────────────────────────────
 # Used by both _filter_discovery_slices (pre-classification, CodeSlice objects)
@@ -531,6 +537,19 @@ class SemanticPipeline:
                         self.dependency_scanner.query_osv(refs),
                         timeout=DEPENDENCY_SCAN_TIMEOUT_SECONDS,
                     )
+                    if any(f.cve_ids for f in findings):
+                        try:
+                            await asyncio.wait_for(
+                                self.dependency_scanner.enrich_with_nvd(findings, max_lookups=NVD_MAX_CVE_LOOKUPS),
+                                timeout=NVD_ENRICHMENT_TIMEOUT_SECONDS,
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                f"NVD CVE enrichment timed out after {NVD_ENRICHMENT_TIMEOUT_SECONDS}s — "
+                                f"dependency findings keep their OSV-derived severity, unenriched"
+                            )
+                        except Exception as exc:
+                            logger.warning(f"NVD CVE enrichment failed (non-blocking): {exc}")
                     dependency_findings = [asdict(f) for f in findings]
                     dependency_control_result = self.dependency_scanner.evaluate_v15_2_1(findings)
             except asyncio.TimeoutError:

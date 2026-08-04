@@ -44,15 +44,25 @@ class ScanService:
         repo_id: Optional[int] = None,
         branch: str = "main",
         scan_mode: str = "DEEP",
+        scan_type: str = "static",
         repo_url: Optional[str] = None,
         repo_provider: Optional[str] = None,
         repo_token: Optional[str] = None,
         file_paths: Optional[list[str]] = None,
         target_url: Optional[str] = None,
+        dynamic_auth_mode: str = "none",
+        dynamic_bearer_token: Optional[str] = None,
+        dynamic_form_login: Optional[dict] = None,
+        dynamic_active_mode: bool = False,
+        dynamic_second_actor_auth_mode: str = "none",
+        dynamic_second_actor_bearer_token: Optional[str] = None,
+        dynamic_second_actor_form_login: Optional[dict] = None,
+        dynamic_scenarios: Optional[list[dict]] = None,
+        dynamic_race_probes: Optional[list[dict]] = None,
     ) -> tuple[str, str]:
         trace_step("Service: ScanService.start() (app/services/scan_service.py)")
         scan_id = f"scan-{uuid.uuid4().hex[:12]}"
-        input_type = "DIRECT_CODE" if code else "REPOSITORY"
+        input_type = "DYNAMIC" if scan_type == "dynamic" else ("DIRECT_CODE" if code else "REPOSITORY")
 
         object_id = to_object_id(user_id)
         if not object_id:
@@ -65,6 +75,8 @@ class ScanService:
             "repo_id": repo_id,
             "branch": branch,
             "mode": scan_mode,
+            "scan_type": scan_type,
+            "dynamic_auth_mode": dynamic_auth_mode,
             "repo_url": repo_url,
             "repo_provider": repo_provider,
             "file_paths": file_paths or None,
@@ -85,7 +97,15 @@ class ScanService:
         }
         await self.db.scans.insert_one(scan_doc)
 
-        if code:
+        if scan_type == "dynamic":
+            trace_step("Dispatch: create_task(_run_dynamic_scan)")
+            asyncio.create_task(self._run_dynamic_scan(
+                scan_id, target_url,
+                dynamic_auth_mode, dynamic_bearer_token, dynamic_form_login, dynamic_active_mode,
+                dynamic_second_actor_auth_mode, dynamic_second_actor_bearer_token,
+                dynamic_second_actor_form_login, dynamic_scenarios, dynamic_race_probes,
+            ))
+        elif code:
             trace_step("Dispatch: create_task(_run_direct_code_scan)")
             asyncio.create_task(
                 self._run_direct_code_scan(scan_id, code, language, filename, scan_mode)
@@ -103,6 +123,16 @@ class ScanService:
                     repo_token,
                     file_paths,
                     target_url,
+                    scan_type,
+                    dynamic_auth_mode,
+                    dynamic_bearer_token,
+                    dynamic_form_login,
+                    dynamic_active_mode,
+                    dynamic_second_actor_auth_mode,
+                    dynamic_second_actor_bearer_token,
+                    dynamic_second_actor_form_login,
+                    dynamic_scenarios,
+                    dynamic_race_probes,
                 )
             )
 
@@ -564,6 +594,224 @@ class ScanService:
                 [f"[ERROR] Scan failed: {str(e)}"],
             )
 
+    # Runs the full DAST engine (crawler, payload checks, logout scenario,
+    # user-supplied scenarios, race probes) and returns plain-dict
+    # (dynamic_findings, discovered_forms), ready to drop into a scan
+    # summary. Shared by _run_dynamic_scan (scan_type="dynamic") and
+    # _run_repository_scan (scan_type="hybrid") so the engine-orchestration
+    # logic exists exactly once.
+    async def _run_dynamic_checks(
+        self,
+        scan_id: str,
+        target_url: str,
+        dynamic_auth_mode: str = "none",
+        dynamic_bearer_token: Optional[str] = None,
+        dynamic_form_login: Optional[dict] = None,
+        dynamic_active_mode: bool = False,
+        dynamic_second_actor_auth_mode: str = "none",
+        dynamic_second_actor_bearer_token: Optional[str] = None,
+        dynamic_second_actor_form_login: Optional[dict] = None,
+        dynamic_scenarios: Optional[list[dict]] = None,
+        dynamic_race_probes: Optional[list[dict]] = None,
+    ) -> tuple[list[dict], list[dict]]:
+        from app.domain.analysis.dast.api_scenario import build_scenario_from_request
+        from app.domain.analysis.dast.checks import run_payload_checks
+        from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig, FormLoginConfig
+        from app.domain.analysis.dast.crawler import crawl
+        from app.domain.analysis.dast.findings import DynamicFinding
+        from app.domain.analysis.dast.logout_discovery import (
+            build_logout_invalidates_session_scenario,
+            discover_logout_url,
+        )
+        from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
+        from app.domain.analysis.dast.scenario_runner import run_scenario
+        from app.domain.analysis.dast.session import DastSessionPair
+        from app.domain.analysis.dast.verdict import Verdict
+
+        MAX_ADDITIONAL_CRAWL_URLS = 5
+
+        def _build_actor(auth_mode_str: str, bearer_token: Optional[str], form_login: Optional[dict]) -> ActorConfig:
+            mode = AuthMode(auth_mode_str)
+            built = ActorConfig(auth_mode=mode)
+            if mode == AuthMode.BEARER:
+                built.bearer_token = bearer_token
+            elif mode == AuthMode.FORM_LOGIN and form_login:
+                built.form_login = FormLoginConfig(**form_login)
+            return built
+
+        auth_mode = AuthMode(dynamic_auth_mode)
+        actor = _build_actor(dynamic_auth_mode, dynamic_bearer_token, dynamic_form_login)
+        second_actor = None
+        if dynamic_second_actor_auth_mode != "none":
+            second_actor = _build_actor(
+                dynamic_second_actor_auth_mode, dynamic_second_actor_bearer_token,
+                dynamic_second_actor_form_login,
+            )
+
+        config = DynamicScanConfig(
+            target_url=target_url, actor=actor, second_actor=second_actor,
+            active_mode=dynamic_active_mode,
+        )
+
+        findings = []
+        discovered_forms: list[dict] = []
+        try:
+            async with DastSessionPair(config) as pair:
+                check_urls = [target_url]
+                try:
+                    crawl_result = await asyncio.wait_for(
+                        crawl(pair.primary, target_url), timeout=30.0,
+                    )
+                    discovered_forms = [asdict(f) for f in crawl_result.forms]
+                    additional_urls = [u for u in crawl_result.urls if u != target_url]
+                    check_urls = [target_url] + additional_urls[:MAX_ADDITIONAL_CRAWL_URLS]
+                except asyncio.TimeoutError:
+                    logger.warning(f"[scan:{scan_id}] Crawler timed out for {target_url}")
+                except Exception as exc:
+                    logger.warning(f"[scan:{scan_id}] Crawler failed (non-blocking): {exc}")
+
+                findings = await asyncio.wait_for(
+                    run_payload_checks(pair.primary, check_urls, active_mode=dynamic_active_mode),
+                    timeout=60.0,
+                )
+
+                if auth_mode != AuthMode.NONE:
+                    logout_url = await discover_logout_url(pair.primary, target_url)
+                    if logout_url:
+                        scenario = build_logout_invalidates_session_scenario(logout_url, target_url)
+                        findings.append(
+                            await run_scenario(pair, scenario, active_mode=dynamic_active_mode)
+                        )
+                    else:
+                        findings.append(DynamicFinding(
+                            control_id="V7.4.1", verdict=Verdict.NOT_TESTED,
+                            rule_id="LOGOUT_INVALIDATES_SESSION", url=target_url, method="SCENARIO",
+                            severity="high",
+                            note="No logout endpoint could be discovered for this target",
+                            confidence=0.2,
+                        ))
+
+                for scenario_data in (dynamic_scenarios or []):
+                    try:
+                        user_scenario = build_scenario_from_request(scenario_data)
+                        findings.append(
+                            await run_scenario(pair, user_scenario, active_mode=dynamic_active_mode)
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"[scan:{scan_id}] User-supplied scenario "
+                            f"'{scenario_data.get('scenario_id', '?')}' failed to run: {exc}"
+                        )
+
+                for race_data in (dynamic_race_probes or []):
+                    try:
+                        race_config = RaceProbeConfig(**race_data)
+                        findings.append(
+                            await run_race_probe(pair, race_config, active_mode=dynamic_active_mode)
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"[scan:{scan_id}] Race probe "
+                            f"'{race_data.get('scenario_id', '?')}' failed to run: {exc}"
+                        )
+        except asyncio.TimeoutError:
+            logger.warning(f"[scan:{scan_id}] Dynamic payload checks timed out for {target_url}")
+        except Exception as exc:
+            logger.warning(f"[scan:{scan_id}] Dynamic payload checks failed (non-blocking): {exc}")
+
+        dynamic_findings = []
+        for finding in findings:
+            finding_dict = asdict(finding)
+            finding_dict["verdict"] = finding.verdict.value
+            dynamic_findings.append(finding_dict)
+
+        return dynamic_findings, discovered_forms
+
+    # Async worker for scan_type="dynamic" — no source, targets a live URL directly.
+    # Phase 2A's payload checks run unauthenticated or authenticated alike (the
+    # session abstracts that away). Phase 2B's LOGOUT_INVALIDATES_SESSION scenario
+    # only runs when an authenticated actor is actually configured — it needs a
+    # real session to invalidate. A second actor exists solely for cross-session
+    # scenarios (e.g. V7.4.3), which also need dynamic_active_mode.
+    async def _run_dynamic_scan(
+        self,
+        scan_id: str,
+        target_url: str,
+        dynamic_auth_mode: str = "none",
+        dynamic_bearer_token: Optional[str] = None,
+        dynamic_form_login: Optional[dict] = None,
+        dynamic_active_mode: bool = False,
+        dynamic_second_actor_auth_mode: str = "none",
+        dynamic_second_actor_bearer_token: Optional[str] = None,
+        dynamic_second_actor_form_login: Optional[dict] = None,
+        dynamic_scenarios: Optional[list[dict]] = None,
+        dynamic_race_probes: Optional[list[dict]] = None,
+    ):
+        trace_step("Worker: _run_dynamic_scan() (app/services/scan_service.py)")
+        start_time = time.time()
+        try:
+            validate_public_http_url(target_url, allow_http=True)
+            await self._update_scan(
+                scan_id,
+                {"state": "RUNNING", "started_at": datetime.utcnow().isoformat(), "progress": 10},
+                [f"[INFO] Starting dynamic scan against {target_url}"],
+            )
+
+            dynamic_findings, discovered_forms = await self._run_dynamic_checks(
+                scan_id, target_url, dynamic_auth_mode, dynamic_bearer_token, dynamic_form_login,
+                dynamic_active_mode, dynamic_second_actor_auth_mode, dynamic_second_actor_bearer_token,
+                dynamic_second_actor_form_login, dynamic_scenarios, dynamic_race_probes,
+            )
+
+            by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+            fail_count = 0
+            for finding_dict in dynamic_findings:
+                if finding_dict["verdict"] == "fail":
+                    fail_count += 1
+                    by_severity[finding_dict["severity"]] = by_severity.get(finding_dict["severity"], 0) + 1
+
+            duration = time.time() - start_time
+            summary = {
+                "scan_id": scan_id,
+                "status": "COMPLETED",
+                "input_type": "DYNAMIC",
+                "total_files": 0,
+                "files_scanned": 0,
+                "vulnerabilities_found": fail_count,
+                "by_severity": by_severity,
+                "duration_seconds": round(duration, 2),
+                "created_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.utcnow().isoformat(),
+                "vulnerabilities": [],
+                "dynamic_findings": dynamic_findings,
+                "discovered_forms": discovered_forms,
+            }
+            await self._update_scan(
+                scan_id,
+                {
+                    "state": "COMPLETED",
+                    "progress": 100,
+                    "finished_at": datetime.utcnow().isoformat(),
+                    "summary": summary,
+                    "vulnerabilities": [],
+                },
+                [
+                    f"[INFO] Dynamic checks run: {len(dynamic_findings)}, failed: {fail_count}",
+                    f"[SUCCESS] Dynamic scan completed in {duration:.2f}s",
+                ],
+            )
+        except Exception as e:
+            logger.error(f"Dynamic scan failed: {e}", exc_info=True)
+            await self._update_scan(
+                scan_id,
+                {
+                    "state": "FAILED",
+                    "finished_at": datetime.utcnow().isoformat(),
+                    "summary": {"scan_id": scan_id, "status": "FAILED", "error": str(e)},
+                },
+                [f"[ERROR] Scan failed: {str(e)}"],
+            )
+
     # Async worker that clones or extracts a repo, runs the pipeline, and saves results to MongoDB
     async def _run_repository_scan(
         self,
@@ -576,6 +824,16 @@ class ScanService:
         repo_token: Optional[str],
         file_paths: Optional[list[str]],
         target_url: Optional[str] = None,
+        scan_type: str = "static",
+        dynamic_auth_mode: str = "none",
+        dynamic_bearer_token: Optional[str] = None,
+        dynamic_form_login: Optional[dict] = None,
+        dynamic_active_mode: bool = False,
+        dynamic_second_actor_auth_mode: str = "none",
+        dynamic_second_actor_bearer_token: Optional[str] = None,
+        dynamic_second_actor_form_login: Optional[dict] = None,
+        dynamic_scenarios: Optional[list[dict]] = None,
+        dynamic_race_probes: Optional[list[dict]] = None,
     ):
         trace_step("Worker: _run_repository_scan() (app/services/scan_service.py)")
         start_time = time.time()
@@ -738,6 +996,51 @@ class ScanService:
                 except Exception as exc:
                     logger.warning(f"[scan:{scan_id}] Dynamic probe failed (non-blocking): {exc}")
 
+            # scan_type="hybrid" — runs the full DAST engine (crawler, payload
+            # checks, scenarios, race probes) alongside the static pipeline above,
+            # against the same target_url the passive probe already uses.
+            dynamic_findings: list[dict] = []
+            discovered_forms: list[dict] = []
+            if scan_type == "hybrid" and target_url:
+                try:
+                    dynamic_findings, discovered_forms = await asyncio.wait_for(
+                        self._run_dynamic_checks(
+                            scan_id, target_url, dynamic_auth_mode, dynamic_bearer_token,
+                            dynamic_form_login, dynamic_active_mode, dynamic_second_actor_auth_mode,
+                            dynamic_second_actor_bearer_token, dynamic_second_actor_form_login,
+                            dynamic_scenarios, dynamic_race_probes,
+                        ),
+                        timeout=120.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"[scan:{scan_id}] Hybrid dynamic checks timed out for {target_url}")
+                except Exception as exc:
+                    logger.warning(f"[scan:{scan_id}] Hybrid dynamic checks failed (non-blocking): {exc}")
+
+                # Basic correlation: annotate findings that share an ASVS control
+                # between the two engines. This does not (yet) map a specific
+                # static taint sink to a specific live endpoint — that needs
+                # framework route introspection this backend doesn't have — but
+                # "both engines independently flagged the same control" is still
+                # a real, useful triage signal (higher-confidence finding).
+                static_controls = set()
+                for v in vulnerabilities:
+                    static_controls.update(v.get("asvs_controls") or [])
+                for finding in dynamic_findings:
+                    if finding.get("control_id") in static_controls:
+                        finding["corroborates_static_finding"] = True
+
+                dynamic_fail_controls = {
+                    f["control_id"] for f in dynamic_findings if f["verdict"] == "fail"
+                }
+                for v in vulnerabilities:
+                    if dynamic_fail_controls & set(v.get("asvs_controls") or []):
+                        v["dynamic_confirmed"] = True
+
+                for finding in dynamic_findings:
+                    if finding["verdict"] == "fail":
+                        by_severity[finding["severity"]] = by_severity.get(finding["severity"], 0) + 1
+
             duration = time.time() - start_time
             summary = {
                 "scan_id": scan_id,
@@ -745,7 +1048,9 @@ class ScanService:
                 "input_type": "REPOSITORY",
                 "total_files": len(files),
                 "files_scanned": len(files),
-                "vulnerabilities_found": len(vulnerabilities),
+                "vulnerabilities_found": len(vulnerabilities) + sum(
+                    1 for f in dynamic_findings if f["verdict"] == "fail"
+                ),
                 "by_severity": by_severity,
                 "duration_seconds": round(duration, 2),
                 "created_at": datetime.utcnow().isoformat(),
@@ -757,6 +1062,8 @@ class ScanService:
                 "dependency_control_result": repo_result.dependency_control_result,
                 "capability_findings": repo_result.capability_findings,
                 "dynamic_probe_findings": dynamic_probe_findings,
+                "dynamic_findings": dynamic_findings,
+                "discovered_forms": discovered_forms,
             }
 
             await self._update_scan(
@@ -860,6 +1167,13 @@ class ScanService:
             "created_at": _to_iso(summary.get("created_at", scan.get("created_at"))),
             "completed_at": _to_iso(summary.get("completed_at", scan.get("finished_at"))),
             "vulnerabilities": summary.get("vulnerabilities", []),
+            "scanned_files": summary.get("scanned_files"),
+            "config_findings": summary.get("config_findings"),
+            "dependency_findings": summary.get("dependency_findings"),
+            "dependency_control_result": summary.get("dependency_control_result"),
+            "capability_findings": summary.get("capability_findings"),
+            "dynamic_findings": summary.get("dynamic_findings"),
+            "discovered_forms": summary.get("discovered_forms"),
         }
         return ScanSummary(**merged)
 

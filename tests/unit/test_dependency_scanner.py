@@ -203,3 +203,76 @@ class TestQueryOsv:
     async def test_no_refs_returns_immediately(self):
         findings = await DependencyScanner().query_osv([])
         assert findings == []
+
+
+class TestCveIdExtraction:
+    @pytest.mark.asyncio
+    async def test_cve_alias_extracted_from_osv_record(self):
+        ref = DependencyRef("flask", "0.12", "PyPI", "requirements.txt")
+        vuln = {
+            "id": "GHSA-test-1234", "summary": "Test vuln", "published": "2020-01-01T00:00:00Z",
+            "aliases": ["CVE-2019-1010083", "PYSEC-2019-01"],
+        }
+        with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=_mock_osv_response([vuln]))):
+            findings = await DependencyScanner().query_osv([ref])
+        assert findings[0].cve_ids == ["CVE-2019-1010083"]
+
+    @pytest.mark.asyncio
+    async def test_osv_id_itself_a_cve_is_captured(self):
+        ref = DependencyRef("flask", "0.12", "PyPI", "requirements.txt")
+        vuln = {"id": "CVE-2021-12345", "summary": "Test vuln", "published": "2020-01-01T00:00:00Z"}
+        with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=_mock_osv_response([vuln]))):
+            findings = await DependencyScanner().query_osv([ref])
+        assert findings[0].cve_ids == ["CVE-2021-12345"]
+
+    @pytest.mark.asyncio
+    async def test_no_cve_alias_leaves_cve_ids_empty(self):
+        ref = DependencyRef("flask", "0.12", "PyPI", "requirements.txt")
+        vuln = {"id": "GHSA-test-1234", "summary": "Test vuln", "published": "2020-01-01T00:00:00Z"}
+        with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=_mock_osv_response([vuln]))):
+            findings = await DependencyScanner().query_osv([ref])
+        assert findings[0].cve_ids == []
+
+
+class TestEnrichWithNvd:
+    @pytest.mark.asyncio
+    async def test_matching_cve_details_attached(self):
+        from app.services.nvd_client import CveDetails
+
+        finding = DependencyFinding(
+            package="flask", version="0.12", ecosystem="PyPI", vuln_id="GHSA-test-1234",
+            severity="HIGH", summary="test", cve_ids=["CVE-2019-1010083"],
+        )
+        canned = {"CVE-2019-1010083": CveDetails(
+            cve_id="CVE-2019-1010083", cvss_score=7.5, cvss_severity="HIGH",
+            description="A vulnerability", references=["https://example.com/advisory"],
+        )}
+        with patch("app.services.nvd_client.fetch_cve_details_batch", AsyncMock(return_value=canned)):
+            await DependencyScanner().enrich_with_nvd([finding])
+
+        assert len(finding.cve_details) == 1
+        assert finding.cve_details[0]["cvss_score"] == 7.5
+
+    @pytest.mark.asyncio
+    async def test_no_cve_ids_skips_nvd_call_entirely(self):
+        finding = DependencyFinding(
+            package="flask", version="0.12", ecosystem="PyPI", vuln_id="GHSA-test-1234",
+            severity="HIGH", summary="test",
+        )
+        mock_batch = AsyncMock()
+        with patch("app.services.nvd_client.fetch_cve_details_batch", mock_batch):
+            await DependencyScanner().enrich_with_nvd([finding])
+
+        mock_batch.assert_not_called()
+        assert finding.cve_details == []
+
+    @pytest.mark.asyncio
+    async def test_unresolved_cve_leaves_details_empty(self):
+        finding = DependencyFinding(
+            package="flask", version="0.12", ecosystem="PyPI", vuln_id="GHSA-test-1234",
+            severity="HIGH", summary="test", cve_ids=["CVE-2019-1010083"],
+        )
+        with patch("app.services.nvd_client.fetch_cve_details_batch", AsyncMock(return_value={})):
+            await DependencyScanner().enrich_with_nvd([finding])
+
+        assert finding.cve_details == []

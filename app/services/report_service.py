@@ -1,5 +1,5 @@
 from typing import Optional
-from io import BytesIO
+from io import BytesIO, StringIO
 import logging
 import csv
 from datetime import datetime
@@ -57,6 +57,13 @@ class ReportService:
             "created_at": summary.get("created_at", scan.get("created_at")),
             "completed_at": summary.get("completed_at", scan.get("finished_at")),
             "vulnerabilities": summary.get("vulnerabilities"),
+            "scanned_files": summary.get("scanned_files"),
+            "config_findings": summary.get("config_findings"),
+            "dependency_findings": summary.get("dependency_findings"),
+            "dependency_control_result": summary.get("dependency_control_result"),
+            "capability_findings": summary.get("capability_findings"),
+            "dynamic_findings": summary.get("dynamic_findings"),
+            "discovered_forms": summary.get("discovered_forms"),
         }
         return ScanSummary(**merged)
 
@@ -108,6 +115,11 @@ class ReportService:
                 "low": summary.by_severity.get("low", 0),
             },
             "vulnerabilities": vulnerabilities,
+            "config_findings": summary.config_findings or [],
+            "dependency_findings": summary.dependency_findings or [],
+            "capability_findings": summary.capability_findings or [],
+            "dynamic_findings": summary.dynamic_findings or [],
+            "discovered_forms": summary.discovered_forms or [],
             "created_at": summary.created_at,
             "completed_at": summary.completed_at,
             "duration_seconds": summary.duration_seconds,
@@ -320,6 +332,91 @@ class ReportService:
 
                     story.append(Spacer(1, 0.3 * inch))
 
+            # Known-vulnerable dependencies (V15.2.1) — CVE / CVSS reporting.
+            # OSV.dev finds *which* CVE applies to a dependency; NVD enrichment
+            # (dependency_scanner.py::enrich_with_nvd) attaches the authoritative
+            # CVSS score where it was reached within that scan's rate-limit
+            # budget. Sorted worst-first (highest CVSS, then SLA-breached) since
+            # that's what a reader wants at the top, not scan/discovery order.
+            if summary.dependency_findings:
+                story.append(Paragraph("Known-Vulnerable Dependencies (CVE)", styles['Heading2']))
+                story.append(Spacer(1, 0.1 * inch))
+
+                xe = self._xe
+
+                def _sort_key(dep: dict) -> tuple:
+                    best_score = max(
+                        (cd.get('cvss_score') or 0 for cd in (dep.get('cve_details') or [])),
+                        default=0,
+                    )
+                    return (-best_score, not dep.get('breached_sla', False))
+
+                for idx, dep in enumerate(sorted(summary.dependency_findings, key=_sort_key), 1):
+                    cve_details = dep.get('cve_details') or []
+                    best_cvss = max((cd.get('cvss_score') or 0 for cd in cve_details), default=None)
+                    cve_ids = dep.get('cve_ids') or ([dep.get('vuln_id')] if dep.get('vuln_id') else [])
+                    label = f"{dep.get('package', 'unknown')}@{dep.get('version', '?')}"
+                    score_label = f" — CVSS {best_cvss}" if best_cvss else ""
+                    dep_title = f"{idx}. {label} ({', '.join(xe(c) for c in cve_ids) or xe(dep.get('vuln_id', 'N/A'))}){xe(score_label)}"
+                    story.append(Paragraph(dep_title, styles['Heading3']))
+
+                    info_text = f"<b>Severity:</b> {xe(dep.get('severity', 'N/A'))}<br/>"
+                    info_text += f"<b>Ecosystem:</b> {xe(dep.get('ecosystem', 'N/A'))}<br/>"
+                    if dep.get('breached_sla'):
+                        info_text += (
+                            f"<b>Remediation SLA:</b> BREACHED "
+                            f"({xe(dep.get('days_since_published'))}d since publish, "
+                            f"SLA {xe(dep.get('sla_days'))}d)<br/>"
+                        )
+                    description = None
+                    if cve_details:
+                        description = cve_details[0].get('description')
+                    info_text += f"<b>Summary:</b> {xe(description or dep.get('summary', 'N/A'))}<br/>"
+                    story.append(Paragraph(info_text, styles['Normal']))
+
+                    for cd in cve_details:
+                        if cd.get('references'):
+                            refs = ", ".join(cd['references'][:3])
+                            story.append(Paragraph(f"<b>References:</b> {xe(refs)}", styles['Normal']))
+
+                    if not cve_details and cve_ids:
+                        story.append(Paragraph(
+                            "<i>CVSS score not available — NVD enrichment did not reach this CVE "
+                            "within this scan's lookup budget.</i>", styles['Normal'],
+                        ))
+
+                    story.append(Spacer(1, 0.2 * inch))
+
+            # Dynamic (DAST) Findings
+            if summary.dynamic_findings:
+                story.append(Paragraph("Dynamic Scan Findings", styles['Heading2']))
+                story.append(Spacer(1, 0.1 * inch))
+
+                xe = self._xe
+                for idx, finding in enumerate(summary.dynamic_findings, 1):
+                    verdict = xe(str(finding.get('verdict', 'unknown')).upper())
+                    rule_id = xe(finding.get('rule_id', 'Unknown'))
+                    control_id = xe(finding.get('control_id', 'N/A'))
+                    finding_title = f"{idx}. {rule_id} ({control_id}) - {verdict}"
+                    story.append(Paragraph(finding_title, styles['Heading3']))
+
+                    info_text = f"<b>URL:</b> {xe(finding.get('url', 'N/A'))}<br/>"
+                    info_text += f"<b>Method:</b> {xe(finding.get('method', 'N/A'))}<br/>"
+                    info_text += f"<b>Note:</b> {xe(finding.get('note', 'N/A'))}<br/>"
+                    story.append(Paragraph(info_text, styles['Normal']))
+                    story.append(Spacer(1, 0.2 * inch))
+
+            # Discovered forms are informational only (never auto-submitted) —
+            # surfaced so a reader knows what the crawler found, not a finding.
+            if summary.discovered_forms:
+                story.append(Paragraph("Discovered Forms (not submitted)", styles['Heading2']))
+                story.append(Spacer(1, 0.1 * inch))
+                for form in summary.discovered_forms:
+                    xe = self._xe
+                    form_text = f"<b>{xe(form.get('method', 'GET'))}</b> {xe(form.get('action_url', 'N/A'))} " \
+                                f"— fields: {xe(', '.join(form.get('fields', []) or []))}"
+                    story.append(Paragraph(form_text, styles['Normal']))
+                story.append(Spacer(1, 0.2 * inch))
 
             # Build PDF
             doc.build(story)
@@ -333,17 +430,17 @@ class ReportService:
     async def export_csv(self, scan_id: str, user: dict) -> Optional[str]:
         """Generate CSV export for a scan"""
         summary = await self._get_summary(scan_id, user)
-        if not summary or not summary.vulnerabilities:
+        if not summary or not (summary.vulnerabilities or summary.dynamic_findings):
             return None
-        
-        output = BytesIO()
+
+        output = StringIO()
         writer = csv.writer(output)
-        
+
         # Header
         writer.writerow(['Type', 'Severity', 'File', 'Line', 'Message', 'CWE'])
-        
+
         # Vulnerabilities
-        for vuln in summary.vulnerabilities:
+        for vuln in summary.vulnerabilities or []:
             writer.writerow([
                 vuln.get('type', 'Unknown'),
                 vuln.get('severity', 'UNKNOWN'),
@@ -352,9 +449,20 @@ class ReportService:
                 vuln.get('message', 'No description'),
                 vuln.get('cwe', '')
             ])
-        
-        output.seek(0)
-        return output.getvalue().decode('utf-8')
+
+        # Dynamic (DAST) findings — HTTP-shaped, not file/line-shaped, so
+        # File/Line hold the URL and verdict respectively for this row type.
+        for finding in summary.dynamic_findings or []:
+            writer.writerow([
+                finding.get('rule_id', 'Unknown'),
+                finding.get('verdict', 'unknown').upper(),
+                finding.get('url', 'N/A'),
+                finding.get('method', 'N/A'),
+                finding.get('note', 'No description'),
+                '',
+            ])
+
+        return output.getvalue()
 
     async def export(self, scan_id: str, fmt: str, user: dict):
         """Export report in specified format"""

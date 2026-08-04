@@ -1,0 +1,182 @@
+"""ScanStart's dynamic_auth_mode/dynamic_bearer_token/dynamic_form_login
+cross-field requirements (Phase 2B API wiring)."""
+import pytest
+from pydantic import ValidationError
+
+from app.schemas.scan import ScanStart
+
+TARGET = "https://example.com"
+
+
+class TestBearerAuth:
+    def test_bearer_with_token_is_valid(self):
+        s = ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_auth_mode="bearer",
+                       dynamic_bearer_token="tok123")
+        assert s.dynamic_bearer_token == "tok123"
+
+    def test_bearer_without_token_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_auth_mode="bearer")
+
+
+class TestFormLoginAuth:
+    def test_form_login_with_config_is_valid(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET, dynamic_auth_mode="form_login",
+            dynamic_form_login={
+                "login_url": f"{TARGET}/login", "username_field": "user", "password_field": "pass",
+                "username": "alice", "password": "hunter2",
+            },
+        )
+        assert s.dynamic_form_login.username == "alice"
+
+    def test_form_login_without_config_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_auth_mode="form_login")
+
+    def test_form_login_url_must_be_http_or_https(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET, dynamic_auth_mode="form_login",
+                dynamic_form_login={
+                    "login_url": "ftp://example.com/login", "username_field": "user",
+                    "password_field": "pass", "username": "alice", "password": "hunter2",
+                },
+            )
+
+
+class TestDefaults:
+    def test_default_auth_mode_is_none_and_unaffected_by_static_scans(self):
+        s = ScanStart(code="print(1)", language="python")
+        assert s.dynamic_auth_mode.value == "none"
+        assert s.dynamic_bearer_token is None
+        assert s.dynamic_form_login is None
+        assert s.dynamic_second_actor_auth_mode.value == "none"
+
+
+class TestSecondActorAuth:
+    def test_second_actor_bearer_with_token_is_valid(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_second_actor_auth_mode="bearer", dynamic_second_actor_bearer_token="tok-second",
+        )
+        assert s.dynamic_second_actor_bearer_token == "tok-second"
+
+    def test_second_actor_bearer_without_token_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_second_actor_auth_mode="bearer")
+
+    def test_second_actor_form_login_without_config_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_second_actor_auth_mode="form_login")
+
+    def test_primary_and_second_actor_are_independent_fields(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_auth_mode="bearer", dynamic_bearer_token="tok-primary",
+            dynamic_second_actor_auth_mode="bearer", dynamic_second_actor_bearer_token="tok-second",
+        )
+        assert s.dynamic_bearer_token == "tok-primary"
+        assert s.dynamic_second_actor_bearer_token == "tok-second"
+
+
+class TestDynamicScenarios:
+    def test_minimal_scenario_is_valid(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_scenarios=[{
+                "scenario_id": "ORDER_STEP_SKIP", "asvs_controls": ["V2.3.1"],
+                "steps": [{"method": "GET", "url": f"{TARGET}/confirm-order"}],
+            }],
+        )
+        assert s.dynamic_scenarios[0].scenario_id == "ORDER_STEP_SKIP"
+        assert s.dynamic_scenarios[0].requires_active_mode is True  # default
+
+    def test_empty_steps_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_scenarios=[{"scenario_id": "X", "steps": []}],
+            )
+
+    def test_invalid_method_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_scenarios=[{
+                    "scenario_id": "X",
+                    "steps": [{"method": "TRACE", "url": f"{TARGET}/x"}],
+                }],
+            )
+
+    def test_invalid_session_actor_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_scenarios=[{
+                    "scenario_id": "X",
+                    "steps": [{"method": "GET", "url": f"{TARGET}/x", "session": "tertiary"}],
+                }],
+            )
+
+    def test_step_url_must_be_http_or_https(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_scenarios=[{
+                    "scenario_id": "X",
+                    "steps": [{"method": "GET", "url": "ftp://target.example/x"}],
+                }],
+            )
+
+    def test_requires_active_mode_can_be_overridden_false(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_scenarios=[{
+                "scenario_id": "X", "requires_active_mode": False,
+                "steps": [{"method": "GET", "url": f"{TARGET}/x"}],
+            }],
+        )
+        assert s.dynamic_scenarios[0].requires_active_mode is False
+
+    def test_defaults_to_none(self):
+        s = ScanStart(code="print(1)", language="python")
+        assert s.dynamic_scenarios is None
+
+
+class TestDynamicRaceProbes:
+    def test_minimal_race_probe_is_valid(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_race_probes=[{"scenario_id": "DOUBLE_REDEEM", "url": f"{TARGET}/redeem"}],
+        )
+        probe = s.dynamic_race_probes[0]
+        assert probe.asvs_controls == ["V2.3.4"]
+        assert probe.concurrency == 5
+        assert probe.max_expected_successes == 1
+        assert probe.requires_active_mode is True
+
+    def test_concurrency_below_minimum_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_race_probes=[{"scenario_id": "X", "url": f"{TARGET}/x", "concurrency": 1}],
+            )
+
+    def test_concurrency_above_maximum_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_race_probes=[{"scenario_id": "X", "url": f"{TARGET}/x", "concurrency": 21}],
+            )
+
+    def test_url_must_be_http_or_https(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_race_probes=[{"scenario_id": "X", "url": "ftp://target.example/x"}],
+            )
+
+    def test_defaults_to_none(self):
+        s = ScanStart(code="print(1)", language="python")
+        assert s.dynamic_race_probes is None

@@ -20,7 +20,7 @@ versions, preferred when present), and PEP 621 pyproject.toml
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -64,6 +64,11 @@ class DependencyFinding:
     days_since_published: Optional[int] = None
     sla_days: int = REMEDIATION_SLA_DAYS[_DEFAULT_SEVERITY]
     breached_sla: bool = False
+    # CVE IDs this OSV record is an alias of (an OSV vuln_id like GHSA-xxxx
+    # or PYSEC-xxxx often *is* the same vulnerability as a CVE — see
+    # DependencyScanner.enrich_with_nvd for how these get their CVSS score).
+    cve_ids: list = field(default_factory=list)
+    cve_details: list = field(default_factory=list)
 
 
 class DependencyScanner:
@@ -226,6 +231,36 @@ class DependencyScanner:
             findings.extend(r)
         return findings
 
+    # ── NVD enrichment ───────────────────────────────────────────────────────
+
+    async def enrich_with_nvd(self, findings: list[DependencyFinding], *, max_lookups: int = 10) -> None:
+        """Attaches authoritative CVSS score/severity/description/references
+        from NVD to each finding's cve_details, for any finding whose OSV
+        record carries a CVE alias. Mutates findings in place. A CVE that
+        isn't reached within max_lookups (rate-limit pacing) simply keeps
+        cve_details empty — the finding itself, and its OSV-derived
+        severity, are unaffected either way.
+        """
+        from app.core.config import settings
+        from app.services.nvd_client import fetch_cve_details_batch
+
+        all_cve_ids = [cve_id for f in findings for cve_id in f.cve_ids]
+        if not all_cve_ids:
+            return
+
+        api_key = settings.NVD_API_KEY or None
+        details_by_id = await fetch_cve_details_batch(all_cve_ids, api_key=api_key, max_lookups=max_lookups)
+        if not details_by_id:
+            return
+
+        for finding in findings:
+            for cve_id in finding.cve_ids:
+                details = details_by_id.get(cve_id)
+                if details is not None:
+                    finding.cve_details.append(asdict(details))
+
+    _CVE_ID_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$")
+
     def _to_finding(self, ref: DependencyRef, vuln: dict) -> DependencyFinding:
         severity = self._extract_severity(vuln)
         published = vuln.get("published")
@@ -233,11 +268,14 @@ class DependencyScanner:
         sla_days = REMEDIATION_SLA_DAYS.get(severity, REMEDIATION_SLA_DAYS[_DEFAULT_SEVERITY])
         breached = days_since is not None and days_since > sla_days
         summary = vuln.get("summary") or vuln.get("details", "")[:200] or vuln.get("id", "")
+        vuln_id = vuln.get("id", "UNKNOWN")
+        aliases = vuln.get("aliases") or []
+        cve_ids = [a for a in ([vuln_id] + aliases) if self._CVE_ID_PATTERN.match(a)]
         return DependencyFinding(
             package=ref.name, version=ref.version, ecosystem=ref.ecosystem,
-            vuln_id=vuln.get("id", "UNKNOWN"), severity=severity, summary=summary,
+            vuln_id=vuln_id, severity=severity, summary=summary,
             published=published, days_since_published=days_since,
-            sla_days=sla_days, breached_sla=breached,
+            sla_days=sla_days, breached_sla=breached, cve_ids=cve_ids,
         )
 
     @staticmethod
