@@ -634,8 +634,10 @@ class ScanService:
         from app.domain.analysis.dast.scenario_runner import run_scenario
         from app.domain.analysis.dast.session import DastSessionPair
         from app.domain.analysis.dast.verdict import Verdict
+        from app.domain.analysis.dast.xss_probe import run_stored_xss_probe
 
         MAX_ADDITIONAL_CRAWL_URLS = 5
+        MAX_FORMS_TO_PROBE = 5
 
         def _build_actor(auth_mode_str: str, bearer_token: Optional[str], form_login: Optional[dict]) -> ActorConfig:
             mode = AuthMode(auth_mode_str)
@@ -662,6 +664,7 @@ class ScanService:
 
         findings = []
         discovered_forms: list[dict] = []
+        discovered_form_objects: list = []
         try:
             async with DastSessionPair(config) as pair:
                 check_urls = [target_url]
@@ -670,6 +673,7 @@ class ScanService:
                         crawl(pair.primary, target_url), timeout=30.0,
                     )
                     discovered_forms = [asdict(f) for f in crawl_result.forms]
+                    discovered_form_objects = crawl_result.forms
                     additional_urls = [u for u in crawl_result.urls if u != target_url]
                     check_urls = [target_url] + additional_urls[:MAX_ADDITIONAL_CRAWL_URLS]
                 except asyncio.TimeoutError:
@@ -710,6 +714,28 @@ class ScanService:
                             f"bridge:{target.static_finding_id}:{target.source_file}:{target.source_line}"
                         )
                     findings.extend(bridge_results)
+
+                # Stored-XSS probe (Phase 4): submits each crawler-discovered
+                # form with a marker payload, then checks for unescaped
+                # reflection across check_urls. Bounded to the first
+                # MAX_FORMS_TO_PROBE forms — each is a real (side-effecting,
+                # active_mode-gated) submission, same budget reasoning as
+                # MAX_ADDITIONAL_CRAWL_URLS above.
+                for form in discovered_form_objects[:MAX_FORMS_TO_PROBE]:
+                    try:
+                        findings.append(
+                            await asyncio.wait_for(
+                                run_stored_xss_probe(
+                                    pair.primary, form, check_urls, active_mode=dynamic_active_mode,
+                                ),
+                                timeout=20.0,
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"[scan:{scan_id}] Stored-XSS probe failed for form "
+                            f"{form.action_url}: {exc}"
+                        )
 
                 if auth_mode != AuthMode.NONE:
                     logout_url = await discover_logout_url(pair.primary, target_url)

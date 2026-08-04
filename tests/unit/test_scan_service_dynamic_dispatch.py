@@ -16,6 +16,7 @@ import pytest
 from mongomock_motor import AsyncMongoMockClient
 
 from app.domain.analysis.dast.config import AuthMode
+from app.domain.analysis.dast.crawler import CrawlResult, DiscoveredForm
 from app.domain.analysis.dast.findings import DynamicFinding
 from app.domain.analysis.dast.verdict import Verdict
 from app.services.scan_service import ScanService
@@ -469,3 +470,75 @@ class TestIdorProbeWiring:
              patch("app.domain.analysis.dast.idor_probe.run_idor_probe", run_idor_probe_mock):
             await svc._run_dynamic_scan("scan-19", TARGET)
         run_idor_probe_mock.assert_not_called()
+
+
+class TestStoredXssProbeWiring:
+    """Unlike race/IDOR probes, stored-XSS runs automatically off whatever
+    forms the crawler discovers — no user-supplied config needed."""
+
+    @pytest.mark.asyncio
+    async def test_discovered_form_triggers_probe(self):
+        svc, db = await _make_service()
+        form = DiscoveredForm(
+            action_url=f"{TARGET}/comment", method="POST", fields=["comment"],
+            source_url=f"{TARGET}/comment-form",
+        )
+        crawl_result = CrawlResult(urls=[TARGET], forms=[form])
+        xss_finding = DynamicFinding(
+            control_id="V1.2.1", verdict=Verdict.FAIL, rule_id="STORED_XSS_PROBE",
+            url=f"{TARGET}/comment-wall", method="GET", note="marker reflected", severity="high",
+        )
+        run_xss_probe_mock = AsyncMock(return_value=xss_finding)
+        await db.scans.insert_one({"scan_id": "scan-20", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=crawl_result)), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.xss_probe.run_stored_xss_probe", run_xss_probe_mock):
+            await svc._run_dynamic_scan("scan-20", TARGET, dynamic_active_mode=True)
+
+        run_xss_probe_mock.assert_called_once()
+        called_form = run_xss_probe_mock.call_args.args[1]
+        assert called_form.action_url == f"{TARGET}/comment"
+
+        doc = await db.scans.find_one({"scan_id": "scan-20"})
+        findings = doc["summary"]["dynamic_findings"]
+        xss_result = next(f for f in findings if f["rule_id"] == "STORED_XSS_PROBE")
+        assert xss_result["verdict"] == "fail"
+
+    @pytest.mark.asyncio
+    async def test_no_forms_discovered_is_a_no_op(self):
+        svc, db = await _make_service()
+        crawl_result = CrawlResult(urls=[TARGET], forms=[])
+        run_xss_probe_mock = AsyncMock()
+        await db.scans.insert_one({"scan_id": "scan-21", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=crawl_result)), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.xss_probe.run_stored_xss_probe", run_xss_probe_mock):
+            await svc._run_dynamic_scan("scan-21", TARGET)
+        run_xss_probe_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_probes_bounded_to_five_forms(self):
+        svc, db = await _make_service()
+        forms = [
+            DiscoveredForm(action_url=f"{TARGET}/f{i}", method="POST", fields=[], source_url=TARGET)
+            for i in range(8)
+        ]
+        crawl_result = CrawlResult(urls=[TARGET], forms=forms)
+        pass_finding = DynamicFinding(
+            control_id="V1.2.1", verdict=Verdict.PASS, rule_id="STORED_XSS_PROBE",
+            url=TARGET, method="POST", note="ok", severity="high",
+        )
+        run_xss_probe_mock = AsyncMock(return_value=pass_finding)
+        await db.scans.insert_one({"scan_id": "scan-22", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=crawl_result)), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.xss_probe.run_stored_xss_probe", run_xss_probe_mock):
+            await svc._run_dynamic_scan("scan-22", TARGET, dynamic_active_mode=True)
+
+        assert run_xss_probe_mock.await_count == 5

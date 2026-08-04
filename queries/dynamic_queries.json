@@ -36,5 +36,22 @@
     "severity": "critical",
     "requires_active_mode": true,
     "description": "Sends a request with an ambiguous Content-Length/Transfer-Encoding combination immediately followed by a distinctly-marked second request on the same connection, then checks whether the marker leaks into the first response — evidence the front-end/back-end chain disagrees on request framing. Best-effort indicator, not a full exploit chain. Gated behind active_mode: a real desync can affect other users' traffic on shared infrastructure, unlike this engine's other checks."
+  },
+  "CSRF_TOKEN_NOT_VALIDATED": {
+    "check_type": "payload",
+    "asvs_controls": ["V3.5.1"],
+    "owasp": "A01:2021-Broken Access Control",
+    "cwe": "CWE-352",
+    "severity": "high",
+    "requires_active_mode": true,
+    "description": "Fetches the target, finds the first state-changing (POST/PUT/PATCH/DELETE) form containing a CSRF-token-shaped hidden field, then resubmits the form with that field dropped. A non-4xx response means the server accepted a state-changing request without validating the anti-CSRF token. Gated behind active_mode: a genuinely unprotected form really does perform the action, unlike this engine's read-only checks."
+  },
+  "UNAUTHENTICATED_ACCESS_ALLOWED": {
+    "check_type": "payload",
+    "asvs_controls": ["V8.2.1"],
+    "owasp": "A01:2021-Broken Access Control",
+    "cwe": "CWE-306",
+    "severity": "high",
+    "description": "Requests the target once through the scan's authenticated session, then again with no credentials at all. If the anonymous request also returns 2xx where the authenticated one did, the endpoint doesn't appear to actually require authentication — forced-browsing / missing function-level access control. Only runs when the scan has an authenticated session configured; otherwise there's nothing to compare against."
   }
 }

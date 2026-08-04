@@ -4,11 +4,12 @@ in Phase 2B with their own runner; these are deliberately the simpler kind.
 """
 import asyncio
 import logging
+import re
 import secrets
 import socket
 import ssl
-from typing import Dict, List, Optional
-from urllib.parse import urlsplit
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import urljoin, urlsplit
 
 from app.domain.analysis.dast.findings import DynamicFinding
 from app.domain.analysis.dast.rule_loader import DynamicQueryRule, load_dynamic_queries
@@ -19,6 +20,16 @@ logger = logging.getLogger(__name__)
 
 _BLOCKED_STATUS_CODES = {400, 403, 404}
 _REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
+
+# Same regex weight class as crawler.py — good enough to find *a* state-changing
+# form and its fields, not a full HTML parser.
+_FORM_TAG_RE = re.compile(r'<form\b([^>]*)>(.*?)</form>', re.IGNORECASE | re.DOTALL)
+_FORM_ACTION_ATTR_RE = re.compile(r'action=["\']([^"\']*)["\']', re.IGNORECASE)
+_FORM_METHOD_ATTR_RE = re.compile(r'method=["\']([^"\']*)["\']', re.IGNORECASE)
+_INPUT_TAG_RE = re.compile(r'<input\b[^>]*>', re.IGNORECASE)
+_INPUT_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*["\']([^"\']*)["\']')
+_STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_CSRF_NAME_HINTS = ("csrf", "xsrf", "authenticity_token", "requestverificationtoken")
 
 
 async def _check_double_decode_bypass(session: DastSession, target_url: str, rule: DynamicQueryRule) -> DynamicFinding:
@@ -264,11 +275,183 @@ async def _check_request_smuggling(session: DastSession, target_url: str, rule: 
     )
 
 
+def _extract_input_fields(form_body: str) -> Dict[str, str]:
+    fields: Dict[str, str] = {}
+    for tag_match in _INPUT_TAG_RE.finditer(form_body):
+        attrs = dict(_INPUT_ATTR_RE.findall(tag_match.group(0)))
+        name = attrs.get("name")
+        if name:
+            fields[name] = attrs.get("value", "")
+    return fields
+
+
+def _find_state_changing_form(html: str, base_url: str) -> Optional[Tuple[str, str, Dict[str, str]]]:
+    for match in _FORM_TAG_RE.finditer(html):
+        attrs, body = match.group(1), match.group(2)
+        method_match = _FORM_METHOD_ATTR_RE.search(attrs)
+        method = method_match.group(1).upper() if method_match else "GET"
+        if method not in _STATE_CHANGING_METHODS:
+            continue
+        action_match = _FORM_ACTION_ATTR_RE.search(attrs)
+        action_url = urljoin(base_url, action_match.group(1)) if action_match else base_url
+        return method, action_url, _extract_input_fields(body)
+    return None
+
+
+async def _check_csrf_token_validation(session: DastSession, target_url: str, rule: DynamicQueryRule) -> DynamicFinding:
+    """Phase 3 — V3.5.1. Fetches target_url, finds the first state-changing
+    form containing a CSRF-token-shaped hidden field, then resubmits it with
+    that field dropped. requires_active_mode in dynamic_queries.json because
+    a genuinely unprotected form really does perform the action."""
+    control_id = rule.asvs_controls[0] if rule.asvs_controls else rule.rule_id
+
+    try:
+        resp = await session.request("GET", target_url)
+    except Exception as exc:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note=f"Could not fetch the page to look for a form: {session.redact(str(exc))}", confidence=0.2,
+        )
+    if resp.status_code == 404 or "html" not in resp.headers.get("content-type", "html"):
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note="Page was unreachable or not HTML — nothing to inspect for a CSRF-protected form",
+            confidence=0.2,
+        )
+
+    form = _find_state_changing_form(resp.text, target_url)
+    if form is None:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note="No state-changing (POST/PUT/PATCH/DELETE) form found on this page to test",
+            confidence=0.2,
+        )
+    method, action_url, fields = form
+    csrf_field_name = next(
+        (name for name in fields if any(hint in name.lower() for hint in _CSRF_NAME_HINTS)), None,
+    )
+    if csrf_field_name is None:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+            url=action_url, method=method,
+            note="Form has no CSRF-token-shaped hidden field — can't confirm or deny token validation this "
+                 "way (the app may rely on SameSite cookies instead, which this check doesn't evaluate)",
+            confidence=0.2,
+        )
+
+    tampered_data = {name: (value or "dast-probe-value") for name, value in fields.items() if name != csrf_field_name}
+    try:
+        tampered_resp = await session.request(method, action_url, data=tampered_data, follow_redirects=False)
+    except Exception as exc:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+            url=action_url, method=method,
+            note=f"Resubmitting the form without the token failed: {session.redact(str(exc))}", confidence=0.2,
+        )
+
+    if tampered_resp.status_code in (400, 401, 403, 419, 422):
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.PASS, rule_id=rule.rule_id, severity=rule.severity,
+            url=action_url, method=method,
+            note=f"Submitting the form without '{csrf_field_name}' was rejected ({tampered_resp.status_code})",
+            confidence=0.6,
+        )
+    if tampered_resp.status_code < 400:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.FAIL, rule_id=rule.rule_id, severity=rule.severity,
+            url=action_url, method=method,
+            note=f"Submitting the form without '{csrf_field_name}' returned {tampered_resp.status_code} — "
+                 f"the token doesn't appear to be validated server-side (a single test run; a session-bound "
+                 f"SameSite cookie could still be providing real protection this check can't see)",
+            confidence=0.6,
+        )
+    return DynamicFinding(
+        control_id=control_id, verdict=Verdict.INCONCLUSIVE, rule_id=rule.rule_id, severity=rule.severity,
+        url=action_url, method=method,
+        note=f"Ambiguous response to the tampered submission: {tampered_resp.status_code}", confidence=0.3,
+    )
+
+
+async def _check_unauthenticated_access(
+    session: DastSession, target_url: str, rule: DynamicQueryRule,
+) -> DynamicFinding:
+    """Phase 3 — V8.2.1 forced-browsing/function-level access control. Requests
+    target_url once through the scan's authenticated session, once with no
+    credentials at all (DastSession.request_unauthenticated), and compares.
+    Only meaningful when the scan actually configured an authenticated
+    session — otherwise both requests would be the same request twice."""
+    control_id = rule.asvs_controls[0] if rule.asvs_controls else rule.rule_id
+
+    if not session.is_authenticated:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_CONFIGURED, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note="This scan has no authenticated session configured, so there's no authenticated baseline "
+                 "to compare an anonymous request against",
+            confidence=1.0,
+        )
+
+    try:
+        authed_resp = await session.request("GET", target_url, follow_redirects=False)
+    except Exception as exc:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note=f"Authenticated baseline request failed: {session.redact(str(exc))}", confidence=0.2,
+        )
+    if not (200 <= authed_resp.status_code < 300):
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note=f"Authenticated request itself returned {authed_resp.status_code} — no confirmed-reachable "
+                 f"baseline to compare an anonymous request against",
+            confidence=0.25,
+        )
+
+    try:
+        anon_resp = await session.request_unauthenticated("GET", target_url, follow_redirects=False)
+    except Exception as exc:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note=f"Anonymous request failed: {session.redact(str(exc))}", confidence=0.2,
+        )
+
+    if anon_resp.status_code in (401, 403) or anon_resp.status_code in _REDIRECT_STATUS_CODES:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.PASS, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note=f"Anonymous request was denied/redirected ({anon_resp.status_code}) where the "
+                 f"authenticated one succeeded ({authed_resp.status_code})",
+            confidence=0.6,
+        )
+    if 200 <= anon_resp.status_code < 300:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.FAIL, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note=f"Anonymous request also returned {anon_resp.status_code} — this endpoint doesn't appear "
+                 f"to actually require authentication",
+            confidence=0.65,
+        )
+    return DynamicFinding(
+        control_id=control_id, verdict=Verdict.INCONCLUSIVE, rule_id=rule.rule_id, severity=rule.severity,
+        url=target_url, method="GET",
+        note=f"Ambiguous anonymous response: {anon_resp.status_code} "
+             f"(authenticated response was {authed_resp.status_code})",
+        confidence=0.3,
+    )
+
+
 _CHECK_FUNCTIONS = {
     "DOUBLE_DECODE_BYPASS": _check_double_decode_bypass,
     "CRLF_HEADER_REFLECTION": _check_crlf_header_reflection,
     "OPEN_REDIRECT_LIVE": _check_open_redirect_live,
     "REQUEST_SMUGGLING": _check_request_smuggling,
+    "CSRF_TOKEN_NOT_VALIDATED": _check_csrf_token_validation,
+    "UNAUTHENTICATED_ACCESS_ALLOWED": _check_unauthenticated_access,
 }
 
 

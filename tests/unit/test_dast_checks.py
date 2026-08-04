@@ -12,7 +12,12 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from app.domain.analysis.dast.checks import _check_request_smuggling, run_payload_checks
+from app.domain.analysis.dast.checks import (
+    _check_csrf_token_validation,
+    _check_request_smuggling,
+    _check_unauthenticated_access,
+    run_payload_checks,
+)
 from app.domain.analysis.dast.config import ActorConfig, AuthMode
 from app.domain.analysis.dast.rule_loader import load_dynamic_queries
 from app.domain.analysis.dast.session import DastSession
@@ -163,6 +168,7 @@ class TestRunPayloadChecksOrchestration:
             findings = await run_payload_checks(session, TARGET, rules=RULES)
         assert {f.rule_id for f in findings} == {
             "DOUBLE_DECODE_BYPASS", "CRLF_HEADER_REFLECTION", "OPEN_REDIRECT_LIVE", "REQUEST_SMUGGLING",
+            "CSRF_TOKEN_NOT_VALIDATED", "UNAUTHENTICATED_ACCESS_ALLOWED",
         }
 
     @pytest.mark.asyncio
@@ -233,3 +239,139 @@ class TestRequestSmuggling:
                 finding = await _check_request_smuggling(session, TARGET, rule)
 
         assert finding.verdict == Verdict.NOT_TESTED
+
+
+class TestCsrfTokenValidation:
+    @pytest.mark.asyncio
+    async def test_missing_token_accepted_fails(self):
+        rule = RULES["CSRF_TOKEN_NOT_VALIDATED"]
+        html = (
+            "<html><body><form method='POST' action='/transfer'>"
+            "<input type='hidden' name='csrf_token' value='abc123'/>"
+            "<input name='amount' value='10'/>"
+            "</form></body></html>"
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, text=html, headers={"content-type": "text/html"})
+            return httpx.Response(200, text="ok")  # POST accepted despite missing csrf_token
+
+        async with _session(handler) as session:
+            finding = await _check_csrf_token_validation(session, TARGET, rule)
+        assert finding.verdict == Verdict.FAIL
+        assert finding.control_id == "V3.5.1"
+
+    @pytest.mark.asyncio
+    async def test_missing_token_rejected_passes(self):
+        rule = RULES["CSRF_TOKEN_NOT_VALIDATED"]
+        html = (
+            "<html><body><form method='POST' action='/transfer'>"
+            "<input type='hidden' name='csrf_token' value='abc123'/>"
+            "</form></body></html>"
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, text=html, headers={"content-type": "text/html"})
+            return httpx.Response(403, text="forbidden")
+
+        async with _session(handler) as session:
+            finding = await _check_csrf_token_validation(session, TARGET, rule)
+        assert finding.verdict == Verdict.PASS
+
+    @pytest.mark.asyncio
+    async def test_form_without_csrf_field_is_not_tested(self):
+        rule = RULES["CSRF_TOKEN_NOT_VALIDATED"]
+        html = "<html><body><form method='POST' action='/submit'><input name='amount' value='10'/></form></body></html>"
+
+        async with _session(lambda r: httpx.Response(200, text=html, headers={"content-type": "text/html"})) as session:
+            finding = await _check_csrf_token_validation(session, TARGET, rule)
+        assert finding.verdict == Verdict.NOT_TESTED
+
+    @pytest.mark.asyncio
+    async def test_no_state_changing_form_is_not_tested(self):
+        rule = RULES["CSRF_TOKEN_NOT_VALIDATED"]
+        html = "<html><body><form method='GET' action='/search'><input name='q'/></form></body></html>"
+
+        async with _session(lambda r: httpx.Response(200, text=html, headers={"content-type": "text/html"})) as session:
+            finding = await _check_csrf_token_validation(session, TARGET, rule)
+        assert finding.verdict == Verdict.NOT_TESTED
+
+    @pytest.mark.asyncio
+    async def test_skipped_by_default_without_active_mode(self):
+        async with _session(lambda r: httpx.Response(404)) as session:
+            findings = await run_payload_checks(session, TARGET, rules=RULES)
+        finding = next(f for f in findings if f.rule_id == "CSRF_TOKEN_NOT_VALIDATED")
+        assert finding.verdict == Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+
+class TestUnauthenticatedAccess:
+    @pytest.mark.asyncio
+    async def test_requires_authenticated_session(self):
+        rule = RULES["UNAUTHENTICATED_ACCESS_ALLOWED"]
+        async with _session(lambda r: httpx.Response(200)) as session:  # AuthMode.NONE
+            finding = await _check_unauthenticated_access(session, TARGET, rule)
+        assert finding.verdict == Verdict.NOT_CONFIGURED
+
+    @pytest.mark.asyncio
+    async def test_enforced_endpoint_passes(self):
+        rule = RULES["UNAUTHENTICATED_ACCESS_ALLOWED"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.headers.get("authorization"):
+                return httpx.Response(200)
+            return httpx.Response(401)
+
+        session = DastSession(
+            ActorConfig(auth_mode=AuthMode.BEARER, bearer_token="tok"),
+            resolve=False, transport=httpx.MockTransport(handler),
+        )
+        async with session:
+            finding = await _check_unauthenticated_access(session, TARGET, rule)
+        assert finding.verdict == Verdict.PASS
+
+    @pytest.mark.asyncio
+    async def test_unenforced_endpoint_fails(self):
+        rule = RULES["UNAUTHENTICATED_ACCESS_ALLOWED"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200)  # 200 regardless of auth
+
+        session = DastSession(
+            ActorConfig(auth_mode=AuthMode.BEARER, bearer_token="tok"),
+            resolve=False, transport=httpx.MockTransport(handler),
+        )
+        async with session:
+            finding = await _check_unauthenticated_access(session, TARGET, rule)
+        assert finding.verdict == Verdict.FAIL
+        assert finding.control_id == "V8.2.1"
+
+    @pytest.mark.asyncio
+    async def test_authenticated_baseline_failure_is_not_tested(self):
+        rule = RULES["UNAUTHENTICATED_ACCESS_ALLOWED"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404)
+
+        session = DastSession(
+            ActorConfig(auth_mode=AuthMode.BEARER, bearer_token="tok"),
+            resolve=False, transport=httpx.MockTransport(handler),
+        )
+        async with session:
+            finding = await _check_unauthenticated_access(session, TARGET, rule)
+        assert finding.verdict == Verdict.NOT_TESTED
+
+    @pytest.mark.asyncio
+    async def test_not_gated_behind_active_mode(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200)
+
+        session = DastSession(
+            ActorConfig(auth_mode=AuthMode.BEARER, bearer_token="tok"),
+            resolve=False, transport=httpx.MockTransport(handler),
+        )
+        async with session:
+            findings = await run_payload_checks(session, TARGET, rules=RULES)  # active_mode defaults False
+        finding = next(f for f in findings if f.rule_id == "UNAUTHENTICATED_ACCESS_ALLOWED")
+        assert finding.verdict != Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION

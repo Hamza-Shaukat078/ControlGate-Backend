@@ -19,12 +19,13 @@ import pytest
 from app.domain.analysis.dast import session as session_module
 from app.domain.analysis.dast.checks import run_payload_checks
 from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig
-from app.domain.analysis.dast.crawler import crawl
+from app.domain.analysis.dast.crawler import DiscoveredForm, crawl
 from app.domain.analysis.dast.idor_probe import IdorProbeConfig, run_idor_probe
 from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
 from app.domain.analysis.dast.rule_loader import load_dynamic_queries
 from app.domain.analysis.dast.session import DastSession, DastSessionPair
 from app.domain.analysis.dast.verdict import Verdict
+from app.domain.analysis.dast.xss_probe import run_stored_xss_probe
 from tests.fixtures.dast_vuln_server import OWNER_BEARER_TOKEN, VulnFixtureServer
 
 RULES = load_dynamic_queries(Path(__file__).resolve().parents[2] / "queries" / "dynamic_queries.json")
@@ -172,5 +173,101 @@ class TestIdorProbeLive:
         async with self._pair(base_url) as pair:
             finding = await run_idor_probe(
                 pair, IdorProbeConfig(scenario_id="IDOR_PROFILE", owner_resource_url=base_url + "/profile/42"),
+            )
+        assert finding.verdict == Verdict.FAIL
+
+
+class TestCsrfTokenValidationLive:
+    async def test_unprotected_form_fails(self, base_url):
+        async with await _session() as session:
+            findings = await run_payload_checks(
+                session, base_url + "/transfer-form", RULES, active_mode=True,
+            )
+        finding = next(f for f in findings if f.rule_id == "CSRF_TOKEN_NOT_VALIDATED")
+        assert finding.verdict == Verdict.FAIL
+
+    async def test_protected_form_passes(self, base_url):
+        async with await _session() as session:
+            findings = await run_payload_checks(
+                session, base_url + "/transfer-form-safe", RULES, active_mode=True,
+            )
+        finding = next(f for f in findings if f.rule_id == "CSRF_TOKEN_NOT_VALIDATED")
+        assert finding.verdict == Verdict.PASS
+
+    async def test_skipped_without_active_mode(self, base_url):
+        async with await _session() as session:
+            findings = await run_payload_checks(session, base_url + "/transfer-form", RULES, active_mode=False)
+        finding = next(f for f in findings if f.rule_id == "CSRF_TOKEN_NOT_VALIDATED")
+        assert finding.verdict == Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+
+class TestUnauthenticatedAccessLive:
+    def _authed_session(self) -> DastSession:
+        return DastSession(ActorConfig(auth_mode=AuthMode.BEARER, bearer_token=OWNER_BEARER_TOKEN))
+
+    async def test_enforced_route_passes(self, base_url):
+        async with self._authed_session() as session:
+            findings = await run_payload_checks(session, base_url + "/admin", RULES, active_mode=False)
+        finding = next(f for f in findings if f.rule_id == "UNAUTHENTICATED_ACCESS_ALLOWED")
+        assert finding.verdict == Verdict.PASS
+
+    async def test_open_route_fails(self, base_url):
+        async with self._authed_session() as session:
+            findings = await run_payload_checks(session, base_url + "/admin-open", RULES, active_mode=False)
+        finding = next(f for f in findings if f.rule_id == "UNAUTHENTICATED_ACCESS_ALLOWED")
+        assert finding.verdict == Verdict.FAIL
+
+    async def test_unauthenticated_scan_is_not_configured(self, base_url):
+        async with await _session() as session:  # AuthMode.NONE
+            findings = await run_payload_checks(session, base_url + "/admin", RULES, active_mode=False)
+        finding = next(f for f in findings if f.rule_id == "UNAUTHENTICATED_ACCESS_ALLOWED")
+        assert finding.verdict == Verdict.NOT_CONFIGURED
+
+
+class TestStoredXssProbeLive:
+    async def test_unescaped_wall_fails(self, base_url, live_server):
+        live_server.reset_comment_state()
+        form = DiscoveredForm(
+            action_url=base_url + "/comment", method="POST", fields=["comment"],
+            source_url=base_url + "/comment-form",
+        )
+        async with await _session() as session:
+            finding = await run_stored_xss_probe(
+                session, form, [base_url + "/comment-wall"], active_mode=True,
+            )
+        assert finding.verdict == Verdict.FAIL
+        assert finding.url == base_url + "/comment-wall"
+
+    async def test_escaped_wall_passes(self, base_url, live_server):
+        live_server.reset_comment_state()
+        form = DiscoveredForm(
+            action_url=base_url + "/comment-safe", method="POST", fields=["comment"],
+            source_url=base_url + "/comment-form-safe",
+        )
+        async with await _session() as session:
+            finding = await run_stored_xss_probe(
+                session, form, [base_url + "/comment-wall-safe"], active_mode=True,
+            )
+        assert finding.verdict == Verdict.PASS
+
+    async def test_skipped_without_active_mode(self, base_url):
+        form = DiscoveredForm(
+            action_url=base_url + "/comment", method="POST", fields=["comment"],
+            source_url=base_url + "/comment-form",
+        )
+        async with await _session() as session:
+            finding = await run_stored_xss_probe(session, form, [base_url + "/comment-wall"])
+        assert finding.verdict == Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+    async def test_crawler_discovered_form_feeds_probe_end_to_end(self, base_url, live_server):
+        # The actual production path (scan_service._run_dynamic_checks): crawl
+        # first to discover the form, then feed exactly what the crawler found
+        # (not a hand-built DiscoveredForm) into the probe.
+        live_server.reset_comment_state()
+        async with await _session() as session:
+            crawl_result = await crawl(session, base_url + "/comment-form")
+            form = next(f for f in crawl_result.forms if f.action_url == base_url + "/comment")
+            finding = await run_stored_xss_probe(
+                session, form, [base_url + "/comment-wall"], active_mode=True,
             )
         assert finding.verdict == Verdict.FAIL

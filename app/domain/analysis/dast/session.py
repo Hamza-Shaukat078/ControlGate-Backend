@@ -34,6 +34,8 @@ class DastSession:
         self._actor = actor
         self._allow_http = allow_http
         self._resolve = resolve
+        self._timeout = timeout
+        self._transport = transport
         self._client = httpx.AsyncClient(timeout=timeout, follow_redirects=True, transport=transport)
         self._secrets: set[str] = set()
         if actor.bearer_token:
@@ -75,6 +77,21 @@ class DastSession:
     async def request(self, method: str, url: str, **kwargs) -> httpx.Response:
         validate_public_http_url(url, allow_http=self._allow_http, resolve=self._resolve)
         return await self._client.request(method, url, **kwargs)
+
+    @property
+    def is_authenticated(self) -> bool:
+        return self._actor.auth_mode != AuthMode.NONE
+
+    async def request_unauthenticated(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """One-off request through this session's transport/timeout but with
+        no Authorization header and none of this session's cookies — used by
+        the unauthenticated-access check to see what an anonymous caller gets,
+        without needing a second real DastSession/actor just for that."""
+        validate_public_http_url(url, allow_http=self._allow_http, resolve=self._resolve)
+        async with httpx.AsyncClient(
+            timeout=self._timeout, follow_redirects=True, transport=self._transport,
+        ) as anon_client:
+            return await anon_client.request(method, url, **kwargs)
 
     def redact(self, text: str) -> str:
         """Strip every known secret value (tokens, passwords, live session

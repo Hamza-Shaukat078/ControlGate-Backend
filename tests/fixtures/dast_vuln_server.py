@@ -13,6 +13,7 @@ that aren't backing a specific live-integration assertion.
 """
 from __future__ import annotations
 
+import html
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,11 +24,19 @@ _redeem_state = {"vulnerable_redeemed": False}
 _redeem_lock = threading.Lock()
 _redeem_safe_state = {"safe_redeemed": False}
 
+# Shared state for the stored-XSS comment-wall routes.
+_comment_state = {"vulnerable": "", "safe": ""}
+
 _REDIRECT_PARAMS = ("url", "next", "redirect", "return", "continue", "dest", "target", "redirect_uri")
 
-# Bearer token the /orders/ route treats as "the owner" — any other value
-# (including a different, equally-valid-looking bearer token) gets denied.
+# Bearer token the /orders/ and /admin routes treat as "authorized" — any
+# other value (including a different, equally-valid-looking bearer token)
+# gets denied.
 OWNER_BEARER_TOKEN = "owner-secret-token"
+
+# Value /transfer-form(-safe) render into their hidden csrf_token field, and
+# what /transfer-safe checks the submitted csrf_token against.
+CSRF_TOKEN_VALUE = "server-csrf-value"
 
 
 class VulnHandler(BaseHTTPRequestHandler):
@@ -116,13 +125,102 @@ class VulnHandler(BaseHTTPRequestHandler):
             self._send(200, b'{"id": 42, "secret": "owner data"}', content_type="application/json")
             return
 
+        if path == "/transfer-form":
+            body = (
+                b"<html><body><form method='POST' action='/transfer'>"
+                b"<input type='hidden' name='csrf_token' value='" + CSRF_TOKEN_VALUE.encode() + b"'/>"
+                b"<input name='amount' value='10'/>"
+                b"</form></body></html>"
+            )
+            self._send(200, body)
+            return
+
+        if path == "/transfer-form-safe":
+            body = (
+                b"<html><body><form method='POST' action='/transfer-safe'>"
+                b"<input type='hidden' name='csrf_token' value='" + CSRF_TOKEN_VALUE.encode() + b"'/>"
+                b"<input name='amount' value='10'/>"
+                b"</form></body></html>"
+            )
+            self._send(200, body)
+            return
+
+        if path == "/admin":
+            # Ownership/authorization enforced by bearer token.
+            auth = self.headers.get("Authorization", "")
+            if auth == f"Bearer {OWNER_BEARER_TOKEN}":
+                self._send(200, b"admin panel")
+            else:
+                self._send(401, b"unauthorized")
+            return
+
+        if path == "/admin-open":
+            # Vulnerable on purpose: no auth check at all, forced-browsing works.
+            self._send(200, b"admin panel")
+            return
+
+        if path == "/comment-form":
+            body = (
+                b"<html><body><form method='POST' action='/comment'>"
+                b"<input name='comment' value=''/></form></body></html>"
+            )
+            self._send(200, body)
+            return
+
+        if path == "/comment-wall":
+            # Vulnerable on purpose: stored comment rendered without escaping.
+            body = f"<html><body>Comments: {_comment_state['vulnerable']}</body></html>".encode()
+            self._send(200, body)
+            return
+
+        if path == "/comment-form-safe":
+            body = (
+                b"<html><body><form method='POST' action='/comment-safe'>"
+                b"<input name='comment' value=''/></form></body></html>"
+            )
+            self._send(200, body)
+            return
+
+        if path == "/comment-wall-safe":
+            body = f"<html><body>Comments: {_comment_state['safe']}</body></html>".encode()
+            self._send(200, body)
+            return
+
         self._send(404, b"not found")
 
     def do_POST(self):
         path = urlsplit(self.path).path
         length = int(self.headers.get("Content-Length", 0))
-        if length:
-            self.rfile.read(length)
+        body_bytes = self.rfile.read(length) if length else b""
+
+        if path == "/transfer":
+            # Vulnerable on purpose: accepts the transfer regardless of
+            # whether a valid csrf_token was submitted.
+            self._send(200, b"transferred")
+            return
+
+        if path == "/transfer-safe":
+            posted = parse_qs(body_bytes.decode("utf-8", errors="replace"))
+            token = posted.get("csrf_token", [None])[0]
+            if token == CSRF_TOKEN_VALUE:
+                self._send(200, b"transferred")
+            else:
+                self._send(403, b"invalid csrf token")
+            return
+
+        if path == "/comment":
+            # Vulnerable on purpose: stores the raw comment, no HTML-escaping
+            # anywhere in the write or read path (see /comment-wall above).
+            posted = parse_qs(body_bytes.decode("utf-8", errors="replace"))
+            _comment_state["vulnerable"] = posted.get("comment", [""])[0]
+            self._send(200, b"thanks")
+            return
+
+        if path == "/comment-safe":
+            posted = parse_qs(body_bytes.decode("utf-8", errors="replace"))
+            _comment_state["safe"] = html.escape(posted.get("comment", [""])[0])
+            self._send(200, b"thanks")
+            return
 
         if path == "/redeem-vulnerable":
             # Check-then-act with no lock: concurrent requests can all
@@ -164,6 +262,10 @@ class VulnFixtureServer:
     def reset_race_state(self):
         _redeem_state["vulnerable_redeemed"] = False
         _redeem_safe_state["safe_redeemed"] = False
+
+    def reset_comment_state(self):
+        _comment_state["vulnerable"] = ""
+        _comment_state["safe"] = ""
 
     def __enter__(self) -> "VulnFixtureServer":
         self._thread.start()
