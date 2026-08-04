@@ -26,12 +26,14 @@ import pytest
 
 from app.domain.analysis.dast import session as session_module
 from app.domain.analysis.dast.checks import _CHECK_FUNCTIONS, run_payload_checks
+from app.domain.analysis.dast.collaborator import CollaboratorServer
 from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig
 from app.domain.analysis.dast.crawler import DiscoveredForm
 from app.domain.analysis.dast.idor_probe import IdorProbeConfig, run_idor_probe
 from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
 from app.domain.analysis.dast.rule_loader import load_dynamic_queries
 from app.domain.analysis.dast.session import DastSession, DastSessionPair
+from app.domain.analysis.dast.ssrf_probe import run_ssrf_probe
 from app.domain.analysis.dast.verdict import Verdict
 from app.domain.analysis.dast.xss_probe import run_stored_xss_probe
 from tests.fixtures.dast_vuln_server import OWNER_BEARER_TOKEN, VulnFixtureServer
@@ -195,4 +197,24 @@ class TestIdorProbeCorpus:
             finding = await run_idor_probe(
                 pair, IdorProbeConfig(scenario_id="CORPUS_IDOR", owner_resource_url=base_url + "/orders/42"),
             )
+        assert finding.verdict == Verdict.PASS
+
+
+class TestSsrfProbeCorpus:
+    async def test_vulnerable_endpoint_fails(self, base_url):
+        with CollaboratorServer() as collab:
+            async with DastSession(ActorConfig()) as session:
+                finding = await run_ssrf_probe(
+                    session, base_url + "/fetch", collab, active_mode=True,
+                    callback_wait_seconds=1.0, candidate_params=["url"],
+                )
+        assert finding.verdict == Verdict.FAIL
+
+    async def test_safe_endpoint_passes(self, base_url):
+        with CollaboratorServer() as collab:
+            async with DastSession(ActorConfig()) as session:
+                finding = await run_ssrf_probe(
+                    session, base_url + "/fetch-safe", collab, active_mode=True,
+                    callback_wait_seconds=1.0, candidate_params=["url"],
+                )
         assert finding.verdict == Verdict.PASS

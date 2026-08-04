@@ -190,6 +190,8 @@ async def start_scan(
             dynamic_crawl_max_pages=payload.dynamic_crawl_max_pages,
             dynamic_crawl_max_depth=payload.dynamic_crawl_max_depth,
             dynamic_rule_ids=payload.dynamic_rule_ids,
+            dynamic_ssrf_collaborator_host=payload.dynamic_ssrf_collaborator_host,
+            dynamic_ssrf_collaborator_port=payload.dynamic_ssrf_collaborator_port,
         )
         
         return ScanResponse(

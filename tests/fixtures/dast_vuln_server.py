@@ -16,6 +16,7 @@ from __future__ import annotations
 import html
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -260,6 +261,26 @@ class VulnHandler(BaseHTTPRequestHandler):
         if path == "/comment-wall-safe":
             body = f"<html><body>Comments: {_comment_state['safe']}</body></html>".encode()
             self._send(200, body)
+            return
+
+        if path == "/fetch":
+            # Vulnerable on purpose: fetches whatever URL the caller supplies,
+            # server-side, with no allowlist at all — the classic SSRF shape.
+            target = qs.get("url", [None])[0]
+            if target is None:
+                self._send(400, b"missing url param")
+                return
+            try:
+                with urllib.request.urlopen(target, timeout=3) as resp:
+                    resp.read(200)
+            except Exception:
+                pass  # the point is that the outbound request was attempted at all
+            self._send(200, b"fetched")
+            return
+
+        if path == "/fetch-safe":
+            # Safe: never fetches a caller-supplied URL at all.
+            self._send(200, b"fetching arbitrary URLs is not supported")
             return
 
         self._send(404, b"not found")

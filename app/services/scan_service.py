@@ -63,6 +63,8 @@ class ScanService:
         dynamic_crawl_max_pages: Optional[int] = None,
         dynamic_crawl_max_depth: Optional[int] = None,
         dynamic_rule_ids: Optional[list[str]] = None,
+        dynamic_ssrf_collaborator_host: Optional[str] = None,
+        dynamic_ssrf_collaborator_port: Optional[int] = None,
     ) -> tuple[str, str]:
         trace_step("Service: ScanService.start() (app/services/scan_service.py)")
         scan_id = f"scan-{uuid.uuid4().hex[:12]}"
@@ -109,6 +111,7 @@ class ScanService:
                 dynamic_second_actor_auth_mode, dynamic_second_actor_bearer_token,
                 dynamic_second_actor_form_login, dynamic_scenarios, dynamic_race_probes,
                 dynamic_idor_probes, dynamic_crawl_max_pages, dynamic_crawl_max_depth, dynamic_rule_ids,
+                dynamic_ssrf_collaborator_host, dynamic_ssrf_collaborator_port,
             ))
         elif code:
             trace_step("Dispatch: create_task(_run_direct_code_scan)")
@@ -142,6 +145,8 @@ class ScanService:
                     dynamic_crawl_max_pages,
                     dynamic_crawl_max_depth,
                     dynamic_rule_ids,
+                    dynamic_ssrf_collaborator_host,
+                    dynamic_ssrf_collaborator_port,
                 )
             )
 
@@ -626,6 +631,8 @@ class ScanService:
         dynamic_crawl_max_pages: Optional[int] = None,
         dynamic_crawl_max_depth: Optional[int] = None,
         dynamic_rule_ids: Optional[list[str]] = None,
+        dynamic_ssrf_collaborator_host: Optional[str] = None,
+        dynamic_ssrf_collaborator_port: Optional[int] = None,
         bridge_targets: Optional[list] = None,
     ) -> tuple[list[dict], list[dict]]:
         from app.domain.analysis.dast.api_scenario import build_scenario_from_request
@@ -641,12 +648,15 @@ class ScanService:
         from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
         from app.domain.analysis.dast.rule_loader import load_dynamic_queries
         from app.domain.analysis.dast.scenario_runner import run_scenario
+        from app.domain.analysis.dast.collaborator import CollaboratorServer
         from app.domain.analysis.dast.session import DastSessionPair
+        from app.domain.analysis.dast.ssrf_probe import run_ssrf_probe
         from app.domain.analysis.dast.verdict import Verdict
         from app.domain.analysis.dast.xss_probe import run_stored_xss_probe
 
         MAX_ADDITIONAL_CRAWL_URLS = 5
         MAX_FORMS_TO_PROBE = 5
+        MAX_SSRF_URLS_TO_PROBE = 5
         # C1 — the crawler and run_payload_checks loops are already strictly
         # sequential (one request in flight at a time, no gather/concurrency
         # to bound with a semaphore) and are the actual volume driver here
@@ -803,6 +813,35 @@ class ScanService:
                             f"{form.action_url}: {exc}"
                         )
 
+                # SSRF probe (Track A2): out-of-band confirmation via a real
+                # HTTP collaborator (see collaborator.py's module docstring
+                # for why this needs an out-of-band signal at all). Only
+                # started when dynamic_active_mode is set — the check itself
+                # is a no-op without it (run_ssrf_probe always returns
+                # SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION otherwise), so
+                # spinning up a listener thread/socket for nothing is
+                # avoided. Bounded to the first MAX_SSRF_URLS_TO_PROBE
+                # crawled URLs, same budget reasoning as the loops above.
+                if dynamic_active_mode:
+                    collaborator_kwargs: Dict[str, Any] = {}
+                    if dynamic_ssrf_collaborator_host:
+                        collaborator_kwargs["host"] = dynamic_ssrf_collaborator_host
+                    if dynamic_ssrf_collaborator_port:
+                        collaborator_kwargs["port"] = dynamic_ssrf_collaborator_port
+                    with CollaboratorServer(**collaborator_kwargs) as collaborator:
+                        for url in check_urls[:MAX_SSRF_URLS_TO_PROBE]:
+                            try:
+                                ssrf_finding = await asyncio.wait_for(
+                                    run_ssrf_probe(
+                                        pair.primary, url, collaborator, active_mode=dynamic_active_mode,
+                                    ),
+                                    timeout=15.0,
+                                )
+                                findings.append(ssrf_finding)
+                                _audit(ssrf_finding)
+                            except Exception as exc:
+                                logger.warning(f"[scan:{scan_id}] SSRF probe failed for {url}: {exc}")
+
                 if auth_mode != AuthMode.NONE:
                     logout_url = await discover_logout_url(pair.primary, target_url)
                     if logout_url:
@@ -911,6 +950,8 @@ class ScanService:
         dynamic_crawl_max_pages: Optional[int] = None,
         dynamic_crawl_max_depth: Optional[int] = None,
         dynamic_rule_ids: Optional[list[str]] = None,
+        dynamic_ssrf_collaborator_host: Optional[str] = None,
+        dynamic_ssrf_collaborator_port: Optional[int] = None,
     ):
         trace_step("Worker: _run_dynamic_scan() (app/services/scan_service.py)")
         start_time = time.time()
@@ -927,6 +968,7 @@ class ScanService:
                 dynamic_active_mode, dynamic_second_actor_auth_mode, dynamic_second_actor_bearer_token,
                 dynamic_second_actor_form_login, dynamic_scenarios, dynamic_race_probes,
                 dynamic_idor_probes, dynamic_crawl_max_pages, dynamic_crawl_max_depth, dynamic_rule_ids,
+                dynamic_ssrf_collaborator_host, dynamic_ssrf_collaborator_port,
             )
 
             by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0}
@@ -1004,6 +1046,8 @@ class ScanService:
         dynamic_crawl_max_pages: Optional[int] = None,
         dynamic_crawl_max_depth: Optional[int] = None,
         dynamic_rule_ids: Optional[list[str]] = None,
+        dynamic_ssrf_collaborator_host: Optional[str] = None,
+        dynamic_ssrf_collaborator_port: Optional[int] = None,
     ):
         trace_step("Worker: _run_repository_scan() (app/services/scan_service.py)")
         start_time = time.time()
@@ -1186,7 +1230,8 @@ class ScanService:
                             dynamic_form_login, dynamic_active_mode, dynamic_second_actor_auth_mode,
                             dynamic_second_actor_bearer_token, dynamic_second_actor_form_login,
                             dynamic_scenarios, dynamic_race_probes, dynamic_idor_probes,
-                            dynamic_crawl_max_pages, dynamic_crawl_max_depth, dynamic_rule_ids, bridge_targets,
+                            dynamic_crawl_max_pages, dynamic_crawl_max_depth, dynamic_rule_ids,
+                            dynamic_ssrf_collaborator_host, dynamic_ssrf_collaborator_port, bridge_targets,
                         ),
                         timeout=120.0,
                     )

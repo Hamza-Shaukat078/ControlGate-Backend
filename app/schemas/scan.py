@@ -270,6 +270,18 @@ class ScanStart(APIModel):
                     "them. Unknown rule_ids are silently ignored, same tolerance as a typo'd "
                     "dynamic_race_probes/dynamic_scenarios scenario_id.",
     )
+    dynamic_ssrf_collaborator_host: Optional[str] = Field(
+        None,
+        description="Host the SSRF out-of-band collaborator listener binds to (V5.3.2). Defaults to "
+                    "127.0.0.1 — only reachable from targets on the same host/network as the scanner. "
+                    "To confirm SSRF against a real external target, this must be a publicly-reachable "
+                    "host; standing up that listener is a deployment concern outside this API's scope. "
+                    "Only used when dynamic_active_mode is true (the check is skipped otherwise).",
+    )
+    dynamic_ssrf_collaborator_port: Optional[int] = Field(
+        None, ge=1, le=65535,
+        description="Port for the SSRF collaborator listener. Defaults to an OS-assigned ephemeral port.",
+    )
 
     @field_validator('target_url')
     @classmethod

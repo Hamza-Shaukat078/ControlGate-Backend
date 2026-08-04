@@ -308,3 +308,25 @@ class TestActiveModeListCaps:
                 scan_type="dynamic", target_url=TARGET,
                 dynamic_rule_ids=[f"RULE_{i}" for i in range(51)],
             )
+
+
+class TestSsrfCollaboratorConfig:
+    def test_valid_host_and_port_accepted(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_ssrf_collaborator_host="collab.example.com",
+            dynamic_ssrf_collaborator_port=8443,
+        )
+        assert s.dynamic_ssrf_collaborator_host == "collab.example.com"
+        assert s.dynamic_ssrf_collaborator_port == 8443
+
+    def test_port_out_of_range_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_ssrf_collaborator_port=0)
+        with pytest.raises(ValidationError):
+            ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_ssrf_collaborator_port=70000)
+
+    def test_defaults_to_none(self):
+        s = ScanStart(code="print(1)", language="python")
+        assert s.dynamic_ssrf_collaborator_host is None
+        assert s.dynamic_ssrf_collaborator_port is None

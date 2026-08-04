@@ -18,12 +18,14 @@ import pytest
 
 from app.domain.analysis.dast import session as session_module
 from app.domain.analysis.dast.checks import run_payload_checks
+from app.domain.analysis.dast.collaborator import CollaboratorServer
 from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig
 from app.domain.analysis.dast.crawler import DiscoveredForm, crawl
 from app.domain.analysis.dast.idor_probe import IdorProbeConfig, run_idor_probe
 from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
 from app.domain.analysis.dast.rule_loader import load_dynamic_queries
 from app.domain.analysis.dast.session import DastSession, DastSessionPair
+from app.domain.analysis.dast.ssrf_probe import run_ssrf_probe
 from app.domain.analysis.dast.verdict import Verdict
 from app.domain.analysis.dast.xss_probe import run_stored_xss_probe
 from tests.fixtures.dast_vuln_server import OWNER_BEARER_TOKEN, VulnFixtureServer
@@ -314,4 +316,35 @@ class TestSqlInjectionLive:
         async with await _session() as session:
             findings = await run_payload_checks(session, base_url + "/products?id=1", RULES, active_mode=False)
         finding = next(f for f in findings if f.rule_id == "SQL_INJECTION_LIVE")
+        assert finding.verdict == Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+
+class TestSsrfProbeLive:
+    # The real proof of Track A2: the fixture server (/fetch) makes a real
+    # server-side HTTP request to the collaborator, over a real loopback
+    # socket the collaborator itself is listening on — not mocked at any
+    # layer. This is the whole point of the out-of-band design.
+    async def test_vulnerable_fetch_endpoint_fails(self, base_url):
+        with CollaboratorServer() as collab:
+            async with await _session() as session:
+                finding = await run_ssrf_probe(
+                    session, base_url + "/fetch", collab, active_mode=True,
+                    callback_wait_seconds=1.0, candidate_params=["url"],
+                )
+        assert finding.verdict == Verdict.FAIL
+        assert "url" in finding.note
+
+    async def test_safe_fetch_endpoint_passes(self, base_url):
+        with CollaboratorServer() as collab:
+            async with await _session() as session:
+                finding = await run_ssrf_probe(
+                    session, base_url + "/fetch-safe", collab, active_mode=True,
+                    callback_wait_seconds=1.0, candidate_params=["url"],
+                )
+        assert finding.verdict == Verdict.PASS
+
+    async def test_skipped_without_active_mode(self, base_url):
+        with CollaboratorServer() as collab:
+            async with await _session() as session:
+                finding = await run_ssrf_probe(session, base_url + "/fetch", collab, candidate_params=["url"])
         assert finding.verdict == Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION

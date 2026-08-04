@@ -10,7 +10,7 @@ test_dast_scenario.py already).
 """
 import asyncio
 import socket
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from mongomock_motor import AsyncMongoMockClient
@@ -31,6 +31,40 @@ def _mock_dns(monkeypatch):
     monkeypatch.setattr(
         socket, "getaddrinfo",
         lambda *a, **kw: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
+    )
+
+
+class _FakeCollaboratorServer:
+    """No real socket/thread — every dynamic_active_mode=True test in this
+    file now also exercises the SSRF probe's collaborator startup
+    (scan_service._run_dynamic_checks starts one whenever active_mode is
+    set, regardless of what else the test cares about); autouse-patching
+    this class file-wide keeps those tests fast the same way DastSessionPair
+    is faked, rather than touching every active_mode=True call site."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def new_token(self) -> str:
+        return "fake-token"
+
+    def callback_url(self, token: str) -> str:
+        return f"http://fake-collaborator.invalid/{token}"
+
+    def hits_for(self, token: str) -> list:
+        return []
+
+    def __enter__(self) -> "_FakeCollaboratorServer":
+        return self
+
+    def __exit__(self, *exc_info) -> bool:
+        return False
+
+
+@pytest.fixture(autouse=True)
+def _fake_collaborator(monkeypatch):
+    monkeypatch.setattr(
+        "app.domain.analysis.dast.collaborator.CollaboratorServer", _FakeCollaboratorServer,
     )
 
 
@@ -689,3 +723,100 @@ class TestActiveModeAuditLog:
 
         audit_logs = [r.getMessage() for r in caplog.records if "Active-mode" in r.getMessage()]
         assert not audit_logs
+
+
+class TestSsrfProbeWiring:
+    """Track A2 — unlike race/IDOR probes, SSRF runs automatically against
+    crawled/target URLs whenever dynamic_active_mode is set, no user-supplied
+    config needed (same shape as stored-XSS)."""
+
+    @pytest.mark.asyncio
+    async def test_ssrf_probe_runs_when_active_mode_enabled(self):
+        svc, db = await _make_service()
+        ssrf_finding = DynamicFinding(
+            control_id="V5.3.2", verdict=Verdict.FAIL, rule_id="SSRF_LIVE",
+            url=TARGET, method="GET", note="callback received", severity="high",
+        )
+        run_ssrf_probe_mock = AsyncMock(return_value=ssrf_finding)
+        await db.scans.insert_one({"scan_id": "scan-30", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.ssrf_probe.run_ssrf_probe", run_ssrf_probe_mock):
+            await svc._run_dynamic_scan("scan-30", TARGET, dynamic_active_mode=True)
+
+        run_ssrf_probe_mock.assert_awaited_once()
+        assert run_ssrf_probe_mock.await_args.args[1] == TARGET  # url is the 2nd positional arg
+        assert run_ssrf_probe_mock.await_args.kwargs["active_mode"] is True
+
+        doc = await db.scans.find_one({"scan_id": "scan-30"})
+        findings = doc["summary"]["dynamic_findings"]
+        ssrf_result = next(f for f in findings if f["rule_id"] == "SSRF_LIVE")
+        assert ssrf_result["verdict"] == "fail"
+
+    @pytest.mark.asyncio
+    async def test_ssrf_probe_and_collaborator_not_started_without_active_mode(self):
+        svc, db = await _make_service()
+        run_ssrf_probe_mock = AsyncMock()
+        collaborator_mock = MagicMock()
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.ssrf_probe.run_ssrf_probe", run_ssrf_probe_mock), \
+             patch("app.domain.analysis.dast.collaborator.CollaboratorServer", collaborator_mock):
+            await svc._run_dynamic_scan("scan-31", TARGET)  # dynamic_active_mode defaults False
+
+        run_ssrf_probe_mock.assert_not_called()
+        collaborator_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_collaborator_host_and_port_are_passed_through(self):
+        svc, db = await _make_service()
+        collaborator_mock = MagicMock()
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.ssrf_probe.run_ssrf_probe", AsyncMock()), \
+             patch("app.domain.analysis.dast.collaborator.CollaboratorServer", collaborator_mock):
+            await svc._run_dynamic_scan(
+                "scan-32", TARGET, dynamic_active_mode=True,
+                dynamic_ssrf_collaborator_host="collab.example.internal",
+                dynamic_ssrf_collaborator_port=9999,
+            )
+
+        collaborator_mock.assert_called_once_with(host="collab.example.internal", port=9999)
+
+    @pytest.mark.asyncio
+    async def test_no_host_or_port_override_uses_collaborator_defaults(self):
+        svc, db = await _make_service()
+        collaborator_mock = MagicMock()
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.ssrf_probe.run_ssrf_probe", AsyncMock()), \
+             patch("app.domain.analysis.dast.collaborator.CollaboratorServer", collaborator_mock):
+            await svc._run_dynamic_scan("scan-33", TARGET, dynamic_active_mode=True)
+
+        collaborator_mock.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_ssrf_probes_bounded_to_five_urls(self):
+        svc, db = await _make_service()
+        crawl_result = CrawlResult(urls=[f"{TARGET}/p{i}" for i in range(8)], forms=[])
+        pass_finding = DynamicFinding(
+            control_id="V5.3.2", verdict=Verdict.PASS, rule_id="SSRF_LIVE",
+            url=TARGET, method="GET", note="no callback", severity="high",
+        )
+        run_ssrf_probe_mock = AsyncMock(return_value=pass_finding)
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=crawl_result)), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.ssrf_probe.run_ssrf_probe", run_ssrf_probe_mock):
+            await svc._run_dynamic_scan("scan-34", TARGET, dynamic_active_mode=True)
+
+        assert run_ssrf_probe_mock.await_count == 5
