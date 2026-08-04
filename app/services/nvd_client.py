@@ -14,8 +14,11 @@ failed lookup (timeout/404/rate-limited) degrades that one CVE to
 other network-dependent check in this backend.
 """
 import asyncio
+import dataclasses
+import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import httpx
@@ -29,12 +32,45 @@ NVD_TIMEOUT_SECONDS = 10.0
 _NO_KEY_DELAY_SECONDS = 6.5
 _WITH_KEY_DELAY_SECONDS = 0.7
 
-# Process-lifetime cache — a CVE's core data (score/description) doesn't
-# change scan to scan, so repeat lookups of the same CVE across scans are
-# wasted, rate-limited calls. Not persisted across restarts; a shared
-# Mongo-backed cache would be the natural next step if this becomes a
-# bottleneck in practice.
+# D2 — a CVE's core data (score/description) doesn't change scan to scan, so
+# repeat lookups of the same CVE across *process restarts*, not just within
+# one, are wasted rate-limited calls. A flat JSON file (not Mongo) on purpose:
+# every call site down to DependencyScanner.enrich_with_nvd() is currently
+# DB-handle-free, and this cache's whole job is surviving a restart, not
+# concurrent multi-instance sharing — a file is the smallest change that
+# solves that, without threading a Mongo connection through three layers
+# that don't have one today.
+_CACHE_FILE = Path(__file__).resolve().parents[2] / ".nvd_cache" / "cve_cache.json"
 _cache: Dict[str, Optional["CveDetails"]] = {}
+_disk_cache_loaded = False
+
+
+def _load_disk_cache() -> None:
+    global _disk_cache_loaded
+    if _disk_cache_loaded:
+        return
+    _disk_cache_loaded = True
+    try:
+        if not _CACHE_FILE.exists():
+            return
+        raw = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+        for cve_id, data in raw.items():
+            _cache[cve_id] = CveDetails(**data) if data is not None else None
+    except Exception as exc:
+        logger.warning(f"Could not load NVD disk cache, starting empty: {exc}")
+
+
+def _save_disk_cache() -> None:
+    try:
+        _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        serializable = {
+            cve_id: (dataclasses.asdict(details) if details is not None else None)
+            for cve_id, details in _cache.items()
+        }
+        _CACHE_FILE.write_text(json.dumps(serializable), encoding="utf-8")
+    except Exception as exc:
+        # Never let a cache-write failure break enrichment itself.
+        logger.warning(f"Could not persist NVD disk cache: {exc}")
 
 
 @dataclass
@@ -62,6 +98,7 @@ def _extract_cvss(cve_data: dict):
 
 
 async def fetch_cve_details(cve_id: str, *, api_key: Optional[str] = None) -> Optional[CveDetails]:
+    _load_disk_cache()
     if cve_id in _cache:
         return _cache[cve_id]
 
@@ -71,6 +108,7 @@ async def fetch_cve_details(cve_id: str, *, api_key: Optional[str] = None) -> Op
             resp = await client.get(NVD_CVE_URL, params={"cveId": cve_id}, headers=headers)
         if resp.status_code == 404:
             _cache[cve_id] = None
+            _save_disk_cache()
             return None
         resp.raise_for_status()
         data = resp.json()
@@ -81,6 +119,7 @@ async def fetch_cve_details(cve_id: str, *, api_key: Optional[str] = None) -> Op
     vulns = data.get("vulnerabilities") or []
     if not vulns:
         _cache[cve_id] = None
+        _save_disk_cache()
         return None
 
     cve_data = vulns[0].get("cve", {})
@@ -94,6 +133,7 @@ async def fetch_cve_details(cve_id: str, *, api_key: Optional[str] = None) -> Op
         description=description, references=references, published=cve_data.get("published"),
     )
     _cache[cve_id] = details
+    _save_disk_cache()
     return details
 
 
