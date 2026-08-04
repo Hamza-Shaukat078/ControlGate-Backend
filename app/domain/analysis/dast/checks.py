@@ -626,12 +626,20 @@ async def run_payload_checks(
     target_urls,  # str | List[str] — a single URL (Phase 2A) or crawler-discovered URLs (Phase 3)
     rules: Optional[Dict[str, DynamicQueryRule]] = None,
     active_mode: bool = False,
+    request_delay: float = 0.0,
 ) -> List[DynamicFinding]:
+    """request_delay: seconds to sleep before each check after the first
+    real one (default 0.0 — no behavior change for direct/test callers).
+    Same reasoning as crawler.py's crawl(): this loop is already strictly
+    sequential, real scans (scan_service.py) pass a small nonzero delay to
+    pace requests against the target; skipped (no-request) checks don't
+    count towards "the first one" or get delayed themselves."""
     if rules is None:
         rules = load_dynamic_queries()
     urls = [target_urls] if isinstance(target_urls, str) else list(target_urls)
 
     findings: List[DynamicFinding] = []
+    made_a_request = False
     for url in urls:
         for rule_id, check_func in _CHECK_FUNCTIONS.items():
             rule = rules.get(rule_id)
@@ -646,6 +654,9 @@ async def run_payload_checks(
                     confidence=1.0,
                 ))
                 continue
+            if made_a_request and request_delay:
+                await asyncio.sleep(request_delay)
+            made_a_request = True
             try:
                 findings.append(await check_func(session, url, rule))
             except Exception as exc:

@@ -647,6 +647,18 @@ class ScanService:
 
         MAX_ADDITIONAL_CRAWL_URLS = 5
         MAX_FORMS_TO_PROBE = 5
+        # C1 — the crawler and run_payload_checks loops are already strictly
+        # sequential (one request in flight at a time, no gather/concurrency
+        # to bound with a semaphore) and are the actual volume driver here
+        # (crawl pages × payload checks per page) — a plain pacing delay
+        # between iterations is enough to stop a large crawl
+        # (dynamic_crawl_max_pages) from firing a rapid-fire burst at a real
+        # target. 0.15s ≈ under 7 req/s, deliberately conservative. Default
+        # is 0.0 on both crawl()/run_payload_checks() so direct/test callers
+        # are unaffected; the smaller, already-capped-at-20 bridge/xss/
+        # scenario/race/idor loops below are left unpaced — much lower
+        # burst risk, not worth the added test-suite wall-clock cost.
+        REQUEST_PACING_SECONDS = 0.15
 
         def _build_actor(auth_mode_str: str, bearer_token: Optional[str], form_login: Optional[dict]) -> ActorConfig:
             mode = AuthMode(auth_mode_str)
@@ -674,7 +686,7 @@ class ScanService:
         # None means "use crawl()'s own defaults" — only pass overrides that were
         # actually supplied so a scan that doesn't set these behaves exactly as
         # before this option existed.
-        crawl_kwargs: Dict[str, Any] = {}
+        crawl_kwargs: Dict[str, Any] = {"request_delay": REQUEST_PACING_SECONDS}
         if dynamic_crawl_max_pages is not None:
             crawl_kwargs["max_pages"] = dynamic_crawl_max_pages
         if dynamic_crawl_max_depth is not None:
@@ -725,6 +737,7 @@ class ScanService:
                 findings = await asyncio.wait_for(
                     run_payload_checks(
                         pair.primary, check_urls, rules=selected_rules, active_mode=dynamic_active_mode,
+                        request_delay=REQUEST_PACING_SECONDS,
                     ),
                     timeout=60.0,
                 )

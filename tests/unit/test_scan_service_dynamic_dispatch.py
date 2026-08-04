@@ -561,7 +561,10 @@ class TestCrawlScopeAndRuleSelectionWiring:
             )
 
         crawl_mock.assert_awaited_once()
-        assert crawl_mock.await_args.kwargs == {"max_pages": 25, "max_depth": 4}
+        kwargs = crawl_mock.await_args.kwargs
+        assert kwargs["max_pages"] == 25
+        assert kwargs["max_depth"] == 4
+        assert kwargs["request_delay"] > 0  # C1 — always paced, not user-configurable
 
     @pytest.mark.asyncio
     async def test_no_crawl_overrides_leaves_crawler_defaults_untouched(self):
@@ -573,7 +576,10 @@ class TestCrawlScopeAndRuleSelectionWiring:
              patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
             await svc._run_dynamic_scan("scan-24", TARGET)
 
-        assert crawl_mock.await_args.kwargs == {}
+        kwargs = crawl_mock.await_args.kwargs
+        assert "max_pages" not in kwargs
+        assert "max_depth" not in kwargs
+        assert kwargs["request_delay"] > 0  # C1 — always paced, even with no scope overrides
 
     @pytest.mark.asyncio
     async def test_rule_ids_filter_which_rules_are_passed(self):
@@ -602,6 +608,18 @@ class TestCrawlScopeAndRuleSelectionWiring:
             await svc._run_dynamic_scan("scan-26", TARGET)
 
         assert run_payload_checks_mock.await_args.kwargs["rules"] is None
+
+    @pytest.mark.asyncio
+    async def test_run_payload_checks_is_paced(self):
+        svc, db = await _make_service()
+        run_payload_checks_mock = AsyncMock(return_value=[])
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", run_payload_checks_mock), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            await svc._run_dynamic_scan("scan-27", TARGET)
+
+        assert run_payload_checks_mock.await_args.kwargs["request_delay"] > 0
 
 
 class TestActiveModeAuditLog:

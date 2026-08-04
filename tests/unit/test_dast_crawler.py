@@ -1,6 +1,8 @@
 """Phase 3 — crawler: same-origin only, GET-only discovery, forms captured
 but never submitted. All against httpx.MockTransport.
 """
+from unittest.mock import AsyncMock, patch
+
 import httpx
 import pytest
 
@@ -168,3 +170,36 @@ class TestFormCapture:
             result = await crawl(session, f"{BASE}/contact", max_depth=0)
 
         assert result.forms[0].action_url == f"{BASE}/contact"
+
+
+class TestRequestPacing:
+    @pytest.mark.asyncio
+    async def test_default_no_delay_between_requests(self):
+        pages = {"/": '<a href="/about">About</a>', "/about": "<p>about</p>"}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=pages.get(request.url.path, ""), headers={"content-type": "text/html"})
+
+        with patch("app.domain.analysis.dast.crawler.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            async with _session(handler) as session:
+                await crawl(session, BASE)
+
+        sleep_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_request_delay_paces_every_request_after_the_first(self):
+        pages = {
+            "/": '<a href="/a">a</a><a href="/b">b</a>',
+            "/a": "<p>a</p>", "/b": "<p>b</p>",
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=pages.get(request.url.path, ""), headers={"content-type": "text/html"})
+
+        with patch("app.domain.analysis.dast.crawler.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            async with _session(handler) as session:
+                result = await crawl(session, BASE, request_delay=0.15)
+
+        # 3 pages visited (/, /a, /b) -> 2 delays (before every request after the first).
+        assert sleep_mock.call_count == len(result.urls) - 1
+        sleep_mock.assert_called_with(0.15)

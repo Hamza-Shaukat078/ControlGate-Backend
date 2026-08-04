@@ -7,7 +7,7 @@ won't construct, so it bypasses httpx via raw sockets. Its tests patch the
 raw-socket helper directly, same pattern test_dynamic_probe.py uses for
 dynamic_probe.py's raw TLS socket calls.
 """
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -516,3 +516,32 @@ class TestSqlInjection:
             )
         finding = next(f for f in findings if f.rule_id == "SQL_INJECTION_LIVE")
         assert finding.verdict != Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+
+class TestRequestPacing:
+    @pytest.mark.asyncio
+    async def test_default_no_delay_between_checks(self):
+        two_rules = {"OPEN_REDIRECT_LIVE": RULES["OPEN_REDIRECT_LIVE"], "REFLECTED_XSS_LIVE": RULES["REFLECTED_XSS_LIVE"]}
+        with patch("app.domain.analysis.dast.checks.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            async with _session(lambda r: httpx.Response(200)) as session:
+                await run_payload_checks(session, f"{TARGET}/x?q=1", rules=two_rules)
+        sleep_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_request_delay_paces_every_check_after_the_first(self):
+        two_rules = {"OPEN_REDIRECT_LIVE": RULES["OPEN_REDIRECT_LIVE"], "REFLECTED_XSS_LIVE": RULES["REFLECTED_XSS_LIVE"]}
+        with patch("app.domain.analysis.dast.checks.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            async with _session(lambda r: httpx.Response(200)) as session:
+                await run_payload_checks(session, f"{TARGET}/x?q=1", rules=two_rules, request_delay=0.15)
+        sleep_mock.assert_called_once_with(0.15)
+
+    @pytest.mark.asyncio
+    async def test_skipped_checks_are_not_paced_or_counted_as_the_first(self):
+        # REQUEST_SMUGGLING requires active_mode -> skipped, no request made.
+        # OPEN_REDIRECT_LIVE runs -> the actual first (and only) real request,
+        # so it should NOT be preceded by a delay.
+        two_rules = {"REQUEST_SMUGGLING": RULES["REQUEST_SMUGGLING"], "OPEN_REDIRECT_LIVE": RULES["OPEN_REDIRECT_LIVE"]}
+        with patch("app.domain.analysis.dast.checks.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            async with _session(lambda r: httpx.Response(200)) as session:
+                await run_payload_checks(session, f"{TARGET}/x?q=1", rules=two_rules, request_delay=0.15)
+        sleep_mock.assert_not_called()

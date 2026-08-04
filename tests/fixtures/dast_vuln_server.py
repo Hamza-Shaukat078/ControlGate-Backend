@@ -110,6 +110,35 @@ class VulnHandler(BaseHTTPRequestHandler):
             self._send(302, b"", extra_headers=[("Location", target)])
             return
 
+        if path == "/redirect-safe":
+            target = None
+            for param in _REDIRECT_PARAMS:
+                if param in qs:
+                    target = qs[param][0]
+                    break
+            if target is None:
+                self._send(400, b"missing redirect param")
+                return
+            # Safe: only same-site relative paths are ever honored — this
+            # rejects both a CRLF-bearing payload and an absolute-URL/
+            # forged-host redirect target outright.
+            if "\r" in target or "\n" in target or "://" in target or not target.startswith("/"):
+                self._send(400, b"invalid redirect target")
+                return
+            self._send(302, b"", extra_headers=[("Location", target)])
+            return
+
+        if path.startswith("/traverse-safe"):
+            # Safe: decodes fully (both levels) before checking for a
+            # traversal sequence, so single- and double-encoded attempts are
+            # both blocked identically — no double-decode gap to exploit.
+            fully_decoded = unquote(unquote(self.path))
+            if ".." in fully_decoded:
+                self._send(403, b"blocked: traversal sequence detected")
+                return
+            self._send(404, b"not found")
+            return
+
         if path.startswith("/traverse"):
             # Simulates a WAF/framework that decodes the path once to check
             # for ".." before a *different* downstream layer decodes again

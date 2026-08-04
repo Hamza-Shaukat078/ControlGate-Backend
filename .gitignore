@@ -11,7 +11,9 @@ tests/.tmp/
 
 # Local database
 vulcan.db
+controlgate.db
 .vulcan_cache/
+.nvd_cache/
 tests/.tmp/
 tests/.tmp_work/
 .pytest_cache/

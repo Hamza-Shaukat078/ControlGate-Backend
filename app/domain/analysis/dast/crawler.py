@@ -10,6 +10,7 @@ Hard constraints (not suggestions): same-origin only, GET-only discovery,
 forms are captured but never submitted here — Phase 2A/2B decide what (if
 anything) to do with a discovered form, and only under active_mode.
 """
+import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
@@ -79,7 +80,15 @@ async def crawl(
     *,
     max_pages: int = DEFAULT_MAX_PAGES,
     max_depth: int = DEFAULT_MAX_DEPTH,
+    request_delay: float = 0.0,
 ) -> CrawlResult:
+    """request_delay: seconds to sleep before each request after the first
+    (default 0.0 — no behavior change for direct/test callers). Real scans
+    go through scan_service.py, which passes a small nonzero pacing delay so
+    a large crawl (dynamic_crawl_max_pages) doesn't fire a rapid-fire burst
+    at the target; this loop is already strictly sequential (one request in
+    flight at a time), so a plain sleep between iterations is enough — no
+    semaphore needed since there's no concurrency here to bound."""
     visited: Set[str] = set()
     queue: List[Tuple[str, int]] = [(start_url.split("#", 1)[0], 0)]
     result = CrawlResult()
@@ -88,6 +97,8 @@ async def crawl(
         url, depth = queue.pop(0)
         if url in visited:
             continue
+        if visited and request_delay:
+            await asyncio.sleep(request_delay)
         visited.add(url)
 
         try:
