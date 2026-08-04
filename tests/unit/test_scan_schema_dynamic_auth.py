@@ -256,3 +256,55 @@ class TestCrawlScopeAndRuleSelection:
         assert s.dynamic_crawl_max_pages is None
         assert s.dynamic_crawl_max_depth is None
         assert s.dynamic_rule_ids is None
+
+
+class TestActiveModeListCaps:
+    """Phase 7 — each of these is a real side-effecting request sequence
+    against the target; an unbounded list is an accidental self-DoS/DoS
+    vector, so ScanStart caps them at 20 (50 for the non-side-effecting
+    dynamic_rule_ids filter)."""
+
+    def test_scenarios_over_cap_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_scenarios=[
+                    {"scenario_id": f"S{i}", "steps": [{"method": "GET", "url": f"{TARGET}/x"}]}
+                    for i in range(21)
+                ],
+            )
+
+    def test_scenarios_at_cap_accepted(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_scenarios=[
+                {"scenario_id": f"S{i}", "steps": [{"method": "GET", "url": f"{TARGET}/x"}]}
+                for i in range(20)
+            ],
+        )
+        assert len(s.dynamic_scenarios) == 20
+
+    def test_race_probes_over_cap_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_race_probes=[
+                    {"scenario_id": f"R{i}", "url": f"{TARGET}/x"} for i in range(21)
+                ],
+            )
+
+    def test_idor_probes_over_cap_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_idor_probes=[
+                    {"scenario_id": f"I{i}", "owner_resource_url": f"{TARGET}/x"} for i in range(21)
+                ],
+            )
+
+    def test_rule_ids_over_cap_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_rule_ids=[f"RULE_{i}" for i in range(51)],
+            )

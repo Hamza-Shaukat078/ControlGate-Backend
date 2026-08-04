@@ -686,6 +686,23 @@ class ScanService:
                 rule_id: rule for rule_id, rule in load_dynamic_queries().items() if rule_id in dynamic_rule_ids
             }
 
+        # Structured record of every check that actually performed a
+        # side-effecting (active_mode-gated) request against the target —
+        # logged once at the end of this scan for post-scan/compliance
+        # review. Skipped/not-configured findings never touched the target,
+        # so they're excluded.
+        active_mode_audit: list[dict] = []
+
+        def _audit(finding: DynamicFinding) -> None:
+            if finding.verdict in (Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION, Verdict.NOT_CONFIGURED):
+                return
+            active_mode_audit.append({
+                "rule_id": finding.rule_id, "control_id": finding.control_id,
+                "url": finding.url, "method": finding.method, "verdict": finding.verdict.value,
+            })
+
+        PER_ITEM_TIMEOUT = 30.0
+
         findings = []
         discovered_forms: list[dict] = []
         discovered_form_objects: list = []
@@ -741,6 +758,16 @@ class ScanService:
                         )
                     findings.extend(bridge_results)
 
+                # REQUEST_SMUGGLING/CSRF_TOKEN_NOT_VALIDATED are the only fixed
+                # rule_ids among the checks above with real side effects when
+                # they actually ran (everything else in run_payload_checks —
+                # redirect/CRLF/double-decode/unauthenticated-access — is
+                # read-only) — audit those specifically, wherever they came
+                # from (check_urls or a bridge target).
+                for finding in findings:
+                    if finding.rule_id in ("REQUEST_SMUGGLING", "CSRF_TOKEN_NOT_VALIDATED"):
+                        _audit(finding)
+
                 # Stored-XSS probe (Phase 4): submits each crawler-discovered
                 # form with a marker payload, then checks for unescaped
                 # reflection across check_urls. Bounded to the first
@@ -749,14 +776,14 @@ class ScanService:
                 # MAX_ADDITIONAL_CRAWL_URLS above.
                 for form in discovered_form_objects[:MAX_FORMS_TO_PROBE]:
                     try:
-                        findings.append(
-                            await asyncio.wait_for(
-                                run_stored_xss_probe(
-                                    pair.primary, form, check_urls, active_mode=dynamic_active_mode,
-                                ),
-                                timeout=20.0,
-                            )
+                        xss_finding = await asyncio.wait_for(
+                            run_stored_xss_probe(
+                                pair.primary, form, check_urls, active_mode=dynamic_active_mode,
+                            ),
+                            timeout=20.0,
                         )
+                        findings.append(xss_finding)
+                        _audit(xss_finding)
                     except Exception as exc:
                         logger.warning(
                             f"[scan:{scan_id}] Stored-XSS probe failed for form "
@@ -779,12 +806,21 @@ class ScanService:
                             confidence=0.2,
                         ))
 
+                # dynamic_scenarios/dynamic_race_probes/dynamic_idor_probes are
+                # user-supplied and schema-capped at 20 each (ScanStart), but
+                # each individual one can still hang against a slow/broken
+                # target — PER_ITEM_TIMEOUT bounds worst-case wall-clock per
+                # item on top of that count cap, same defense-in-depth
+                # reasoning as the bridge/xss loops' per-item timeouts above.
                 for scenario_data in (dynamic_scenarios or []):
                     try:
                         user_scenario = build_scenario_from_request(scenario_data)
-                        findings.append(
-                            await run_scenario(pair, user_scenario, active_mode=dynamic_active_mode)
+                        scenario_finding = await asyncio.wait_for(
+                            run_scenario(pair, user_scenario, active_mode=dynamic_active_mode),
+                            timeout=PER_ITEM_TIMEOUT,
                         )
+                        findings.append(scenario_finding)
+                        _audit(scenario_finding)
                     except Exception as exc:
                         logger.warning(
                             f"[scan:{scan_id}] User-supplied scenario "
@@ -794,9 +830,12 @@ class ScanService:
                 for race_data in (dynamic_race_probes or []):
                     try:
                         race_config = RaceProbeConfig(**race_data)
-                        findings.append(
-                            await run_race_probe(pair, race_config, active_mode=dynamic_active_mode)
+                        race_finding = await asyncio.wait_for(
+                            run_race_probe(pair, race_config, active_mode=dynamic_active_mode),
+                            timeout=PER_ITEM_TIMEOUT,
                         )
+                        findings.append(race_finding)
+                        _audit(race_finding)
                     except Exception as exc:
                         logger.warning(
                             f"[scan:{scan_id}] Race probe "
@@ -806,9 +845,12 @@ class ScanService:
                 for idor_data in (dynamic_idor_probes or []):
                     try:
                         idor_config = IdorProbeConfig(**idor_data)
-                        findings.append(
-                            await run_idor_probe(pair, idor_config, active_mode=dynamic_active_mode)
+                        idor_finding = await asyncio.wait_for(
+                            run_idor_probe(pair, idor_config, active_mode=dynamic_active_mode),
+                            timeout=PER_ITEM_TIMEOUT,
                         )
+                        findings.append(idor_finding)
+                        _audit(idor_finding)
                     except Exception as exc:
                         logger.warning(
                             f"[scan:{scan_id}] IDOR probe "
@@ -818,6 +860,12 @@ class ScanService:
             logger.warning(f"[scan:{scan_id}] Dynamic payload checks timed out for {target_url}")
         except Exception as exc:
             logger.warning(f"[scan:{scan_id}] Dynamic payload checks failed (non-blocking): {exc}")
+
+        if active_mode_audit:
+            logger.info(
+                f"[scan:{scan_id}] Active-mode (side-effecting) checks executed against "
+                f"{target_url}: {active_mode_audit}"
+            )
 
         dynamic_findings = []
         for finding in findings:

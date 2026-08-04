@@ -602,3 +602,72 @@ class TestCrawlScopeAndRuleSelectionWiring:
             await svc._run_dynamic_scan("scan-26", TARGET)
 
         assert run_payload_checks_mock.await_args.kwargs["rules"] is None
+
+
+class TestActiveModeAuditLog:
+    """Phase 7 — every check that actually performed a side-effecting
+    request gets logged once at the end of the scan; skipped ones (no
+    active_mode) never touched the target and shouldn't appear."""
+
+    @pytest.mark.asyncio
+    async def test_executed_race_probe_is_logged(self, caplog):
+        svc, db = await _make_service()
+        race_finding = DynamicFinding(
+            control_id="V2.3.4", verdict=Verdict.FAIL, rule_id="DOUBLE_REDEEM",
+            url=f"{TARGET}/redeem", method="POST", note="2 of 5 succeeded", severity="high",
+        )
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.race_probe.run_race_probe", AsyncMock(return_value=race_finding)), \
+             caplog.at_level("INFO"):
+            await svc._run_dynamic_scan(
+                "scan-27", TARGET, dynamic_active_mode=True,
+                dynamic_race_probes=[{"scenario_id": "DOUBLE_REDEEM", "url": f"{TARGET}/redeem"}],
+            )
+
+        audit_logs = [r.getMessage() for r in caplog.records if "Active-mode" in r.getMessage()]
+        assert audit_logs
+        assert "DOUBLE_REDEEM" in audit_logs[0]
+
+    @pytest.mark.asyncio
+    async def test_skipped_probe_is_not_logged(self, caplog):
+        svc, db = await _make_service()
+        skipped_finding = DynamicFinding(
+            control_id="V2.3.4", verdict=Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION,
+            rule_id="DOUBLE_REDEEM", url=f"{TARGET}/redeem", method="POST", note="skipped", severity="high",
+        )
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.race_probe.run_race_probe", AsyncMock(return_value=skipped_finding)), \
+             caplog.at_level("INFO"):
+            await svc._run_dynamic_scan(
+                "scan-28", TARGET, dynamic_active_mode=False,
+                dynamic_race_probes=[{"scenario_id": "DOUBLE_REDEEM", "url": f"{TARGET}/redeem"}],
+            )
+
+        audit_logs = [r.getMessage() for r in caplog.records if "Active-mode" in r.getMessage()]
+        assert not audit_logs
+
+    @pytest.mark.asyncio
+    async def test_read_only_open_redirect_finding_is_not_audited(self, caplog):
+        svc, db = await _make_service()
+        redirect_finding = DynamicFinding(
+            control_id="V3.7.2", verdict=Verdict.FAIL, rule_id="OPEN_REDIRECT_LIVE",
+            url=f"{TARGET}/next-link", method="GET", note="redirect", severity="medium",
+        )
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch(
+                 "app.domain.analysis.dast.checks.run_payload_checks",
+                 AsyncMock(return_value=[redirect_finding]),
+             ), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             caplog.at_level("INFO"):
+            await svc._run_dynamic_scan("scan-29", TARGET)
+
+        audit_logs = [r.getMessage() for r in caplog.records if "Active-mode" in r.getMessage()]
+        assert not audit_logs

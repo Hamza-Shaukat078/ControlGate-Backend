@@ -231,25 +231,28 @@ class ScanStart(APIModel):
         None, description="Form-login credentials for the second actor. Never persisted."
     )
     dynamic_scenarios: Optional[list[DynamicScenarioRequest]] = Field(
-        None,
+        None, max_length=20,
         description="User-supplied multi-step scenarios for app-specific checks the engine can't "
                     "generically discover — e.g. V7.4.3 (credential change invalidates other "
                     "sessions: step 1 on 'primary', step 2 re-checking on 'secondary'), V8.3.2 "
                     "(permission revoke takes effect immediately), V2.3.1 (step-skipping). Each "
                     "runs through the session(s) configured via dynamic_auth_mode/"
-                    "dynamic_second_actor_auth_mode.",
+                    "dynamic_second_actor_auth_mode. Capped at 20 per scan — each one is a real "
+                    "side-effecting request sequence against the target.",
     )
     dynamic_race_probes: Optional[list[DynamicRaceProbeRequest]] = Field(
-        None,
+        None, max_length=20,
         description="User-supplied race/double-submit probes (V2.3.4) — fires N concurrent "
-                    "requests at one endpoint and flags it if more succeed than expected.",
+                    "requests at one endpoint and flags it if more succeed than expected. Capped "
+                    "at 20 per scan, same reasoning as dynamic_scenarios.",
     )
     dynamic_idor_probes: Optional[list[DynamicIdorProbeRequest]] = Field(
-        None,
+        None, max_length=20,
         description="User-supplied cross-session IDOR/BOLA probes (V8.2.1) — the primary actor "
                     "requests a resource it owns, the second actor requests the same URL, and a "
                     "2xx for the second actor flags a missing ownership check. Requires "
-                    "dynamic_second_actor_auth_mode to be configured.",
+                    "dynamic_second_actor_auth_mode to be configured. Capped at 20 per scan, same "
+                    "reasoning as dynamic_scenarios.",
     )
     dynamic_crawl_max_pages: Optional[int] = Field(
         None, ge=1, le=100,
@@ -261,7 +264,7 @@ class ScanStart(APIModel):
         description="Override the crawler's default link-following depth (2) for dynamic/hybrid scans.",
     )
     dynamic_rule_ids: Optional[list[str]] = Field(
-        None,
+        None, max_length=50,
         description="Restrict which payload-check rule_ids (e.g. 'OPEN_REDIRECT_LIVE', "
                     "'CSRF_TOKEN_NOT_VALIDATED') run against crawled/target URLs. Omit to run all of "
                     "them. Unknown rule_ids are silently ignored, same tolerance as a typo'd "
