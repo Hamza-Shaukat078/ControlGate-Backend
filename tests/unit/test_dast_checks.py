@@ -14,7 +14,9 @@ import pytest
 
 from app.domain.analysis.dast.checks import (
     _check_csrf_token_validation,
+    _check_reflected_xss,
     _check_request_smuggling,
+    _check_sql_injection,
     _check_unauthenticated_access,
     run_payload_checks,
 )
@@ -168,7 +170,8 @@ class TestRunPayloadChecksOrchestration:
             findings = await run_payload_checks(session, TARGET, rules=RULES)
         assert {f.rule_id for f in findings} == {
             "DOUBLE_DECODE_BYPASS", "CRLF_HEADER_REFLECTION", "OPEN_REDIRECT_LIVE", "REQUEST_SMUGGLING",
-            "CSRF_TOKEN_NOT_VALIDATED", "UNAUTHENTICATED_ACCESS_ALLOWED",
+            "CSRF_TOKEN_NOT_VALIDATED", "UNAUTHENTICATED_ACCESS_ALLOWED", "REFLECTED_XSS_LIVE",
+            "SQL_INJECTION_LIVE",
         }
 
     @pytest.mark.asyncio
@@ -374,4 +377,142 @@ class TestUnauthenticatedAccess:
         async with session:
             findings = await run_payload_checks(session, TARGET, rules=RULES)  # active_mode defaults False
         finding = next(f for f in findings if f.rule_id == "UNAUTHENTICATED_ACCESS_ALLOWED")
+        assert finding.verdict != Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+
+class TestReflectedXss:
+    @pytest.mark.asyncio
+    async def test_no_query_params_is_not_tested(self):
+        rule = RULES["REFLECTED_XSS_LIVE"]
+        async with _session(lambda r: httpx.Response(200, text="<html></html>")) as session:
+            finding = await _check_reflected_xss(session, TARGET, rule)
+        assert finding.verdict == Verdict.NOT_TESTED
+
+    @pytest.mark.asyncio
+    async def test_unescaped_reflection_fails(self):
+        rule = RULES["REFLECTED_XSS_LIVE"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            q = request.url.params.get("q", "")
+            return httpx.Response(200, text=f"<html><body>Results for: {q}</body></html>")
+
+        async with _session(handler) as session:
+            finding = await _check_reflected_xss(session, f"{TARGET}/search?q=hello", rule)
+        assert finding.verdict == Verdict.FAIL
+        assert finding.control_id == "V1.2.1"
+        assert "'q'" in finding.note
+
+    @pytest.mark.asyncio
+    async def test_escaped_reflection_passes(self):
+        rule = RULES["REFLECTED_XSS_LIVE"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            q = request.url.params.get("q", "")
+            escaped = q.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            return httpx.Response(200, text=f"<html><body>Results for: {escaped}</body></html>")
+
+        async with _session(handler) as session:
+            finding = await _check_reflected_xss(session, f"{TARGET}/search?q=hello", rule)
+        assert finding.verdict == Verdict.PASS
+
+    @pytest.mark.asyncio
+    async def test_unreachable_param_is_not_tested(self):
+        rule = RULES["REFLECTED_XSS_LIVE"]
+
+        async with _session(lambda r: httpx.Response(404)) as session:
+            finding = await _check_reflected_xss(session, f"{TARGET}/search?q=hello", rule)
+        assert finding.verdict == Verdict.NOT_TESTED
+
+    @pytest.mark.asyncio
+    async def test_multiple_params_only_flags_the_reflecting_one(self):
+        rule = RULES["REFLECTED_XSS_LIVE"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            q = request.url.params.get("q", "")
+            other = request.url.params.get("page", "")
+            # 'page' never reflects, only 'q' does.
+            return httpx.Response(200, text=f"<html><body>q={q} page-safe={other!r}</body></html>")
+
+        async with _session(handler) as session:
+            finding = await _check_reflected_xss(session, f"{TARGET}/search?q=hello&page=1", rule)
+        assert finding.verdict == Verdict.FAIL
+
+    @pytest.mark.asyncio
+    async def test_not_gated_behind_active_mode(self):
+        async with _session(lambda r: httpx.Response(200, text="<html></html>")) as session:
+            findings = await run_payload_checks(session, f"{TARGET}/search?q=hello", rules=RULES)
+        finding = next(f for f in findings if f.rule_id == "REFLECTED_XSS_LIVE")
+        assert finding.verdict != Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+
+class TestSqlInjection:
+    @pytest.mark.asyncio
+    async def test_no_query_params_is_not_tested(self):
+        rule = RULES["SQL_INJECTION_LIVE"]
+        async with _session(lambda r: httpx.Response(200)) as session:
+            finding = await _check_sql_injection(session, TARGET, rule)
+        assert finding.verdict == Verdict.NOT_TESTED
+
+    @pytest.mark.asyncio
+    async def test_leaked_sql_error_fails(self):
+        rule = RULES["SQL_INJECTION_LIVE"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("id", "").endswith("'1'='1"):
+                return httpx.Response(500, text="You have an error in your SQL syntax near '''")
+            return httpx.Response(200, text="no results")
+
+        async with _session(handler) as session:
+            finding = await _check_sql_injection(session, f"{TARGET}/items?id=1", rule)
+        assert finding.verdict == Verdict.FAIL
+        assert finding.control_id == "V1.2.4"
+        assert "error" in finding.note.lower()
+
+    @pytest.mark.asyncio
+    async def test_boolean_response_length_diff_fails(self):
+        rule = RULES["SQL_INJECTION_LIVE"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("id", "").endswith("'1'='1"):
+                return httpx.Response(200, text="row " * 200)  # always-true: many rows
+            return httpx.Response(200, text="no rows found")  # always-false: none
+
+        async with _session(handler) as session:
+            finding = await _check_sql_injection(session, f"{TARGET}/items?id=1", rule)
+        assert finding.verdict == Verdict.FAIL
+        assert "boolean" in finding.note.lower()
+
+    @pytest.mark.asyncio
+    async def test_identical_responses_pass(self):
+        rule = RULES["SQL_INJECTION_LIVE"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text="item not found")
+
+        async with _session(handler) as session:
+            finding = await _check_sql_injection(session, f"{TARGET}/items?id=1", rule)
+        assert finding.verdict == Verdict.PASS
+
+    @pytest.mark.asyncio
+    async def test_both_404_is_not_tested(self):
+        rule = RULES["SQL_INJECTION_LIVE"]
+
+        async with _session(lambda r: httpx.Response(404)) as session:
+            finding = await _check_sql_injection(session, f"{TARGET}/items?id=1", rule)
+        assert finding.verdict == Verdict.NOT_TESTED
+
+    @pytest.mark.asyncio
+    async def test_skipped_by_default_without_active_mode(self):
+        async with _session(lambda r: httpx.Response(200)) as session:
+            findings = await run_payload_checks(session, f"{TARGET}/items?id=1", rules=RULES)
+        finding = next(f for f in findings if f.rule_id == "SQL_INJECTION_LIVE")
+        assert finding.verdict == Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+    @pytest.mark.asyncio
+    async def test_runs_when_active_mode_enabled(self):
+        async with _session(lambda r: httpx.Response(200, text="same body")) as session:
+            findings = await run_payload_checks(
+                session, f"{TARGET}/items?id=1", rules=RULES, active_mode=True,
+            )
+        finding = next(f for f in findings if f.rule_id == "SQL_INJECTION_LIVE")
         assert finding.verdict != Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION

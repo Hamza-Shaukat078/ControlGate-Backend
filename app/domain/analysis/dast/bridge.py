@@ -17,30 +17,57 @@ against this specific URL".
 
 Best-effort and intentionally narrow:
   - Only the rule_ids in STATIC_TO_DYNAMIC_RULE_MAP participate; most of the
-    202 static rules (SQLi, XSS, IDOR, ...) have no live-check counterpart
-    yet (see Phase 3 of the plan) and are silently skipped here, not guessed
-    at.
+    202 static rules have no live-check counterpart yet and are silently
+    skipped here, not guessed at.
   - Route resolution is regex/heuristic, same weight class as crawler.py and
     logout_discovery.py, not a real Flask/Express AST walk. A finding whose
     route can't be confidently resolved is skipped rather than mapped to a
     wrong URL — a wrong bridge target is worse than no bridge target.
+  - REFLECTED_XSS_LIVE/SQL_INJECTION_LIVE (checks.py) deliberately only test
+    query params a URL already carries — no fixed candidate-param-name list
+    the way OPEN_REDIRECT_LIVE has, so a bare route URL isn't enough for
+    these two. For rule_ids mapped to them, the tainted param name is
+    regex-extracted from the static finding's source_label (e.g.
+    request.args.get('q')) and appended to the bridge URL; if it can't be
+    extracted, the finding is skipped rather than producing a target that
+    could only ever return NOT_TESTED.
 """
 import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 
 logger = logging.getLogger(__name__)
 
 # Only rules with a real live-check counterpart today (queries/dynamic_queries.json).
-# Extend this alongside Phase 3 as more dynamic payload checks are added.
+# Extend this alongside new dynamic payload checks as they're added.
 STATIC_TO_DYNAMIC_RULE_MAP: Dict[str, str] = {
     "UNVALIDATED_REDIRECT": "OPEN_REDIRECT_LIVE",
     "PATH_TRAVERSAL": "DOUBLE_DECODE_BYPASS",
     "HTTP_REQUEST_SMUGGLING": "REQUEST_SMUGGLING",
+    "XSS": "REFLECTED_XSS_LIVE",
+    "SQL_INJECTION": "SQL_INJECTION_LIVE",
 }
+
+# Dynamic rule_ids that only test query params a URL already carries — see
+# module docstring. A bridge target for one of these needs a param name.
+_PARAM_DEPENDENT_DYNAMIC_RULES = {"REFLECTED_XSS_LIVE", "SQL_INJECTION_LIVE"}
+
+# Common "read a query/GET param" idioms across the languages universal_parser
+# targets — same best-effort spirit as the route regexes below, not a real
+# expression-level taint tracker (that's the static engine's job; this only
+# needs the param *name*, which is almost always a literal string argument).
+_PARAM_NAME_PATTERNS = [
+    re.compile(r"""request\.args\.get\(\s*['"](\w+)['"]"""),          # Flask
+    re.compile(r"""request\.args\[\s*['"](\w+)['"]\s*\]"""),          # Flask
+    re.compile(r"""request\.GET\.get\(\s*['"](\w+)['"]"""),           # Django
+    re.compile(r"""request\.GET\[\s*['"](\w+)['"]\s*\]"""),           # Django
+    re.compile(r"""req\.query\.(\w+)\b"""),                           # Express
+    re.compile(r"""req\.query\[\s*['"](\w+)['"]\s*\]"""),             # Express
+    re.compile(r"""req\.params\.(\w+)\b"""),                          # Express (path/query params)
+]
 
 _PYTHON_EXTENSIONS = {".py"}
 _JS_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
@@ -141,6 +168,14 @@ def find_enclosing_route(source_lines: List[str], line_no: int, language: Option
     return None
 
 
+def _extract_param_name(source_label: str) -> Optional[str]:
+    for pattern in _PARAM_NAME_PATTERNS:
+        match = pattern.search(source_label)
+        if match:
+            return match.group(1)
+    return None
+
+
 def build_dynamic_targets(
     vulnerabilities: List[dict],
     repo_root: Path,
@@ -148,8 +183,10 @@ def build_dynamic_targets(
 ) -> List[BridgeTarget]:
     """vulnerabilities: formatted dicts as produced by
     SemanticPipeline._format_vulnerability (needs ["type" or rule_id-bearing
-    field], "asvs_controls", "location"). Only findings whose primary rule_id
-    is in STATIC_TO_DYNAMIC_RULE_MAP and whose route resolves are returned.
+    field], "asvs_controls", "location", and "evidence.source" for the two
+    param-dependent rules). Only findings whose primary rule_id is in
+    STATIC_TO_DYNAMIC_RULE_MAP and whose route (and, where needed, param
+    name) resolves are returned.
     """
     targets: List[BridgeTarget] = []
     for vuln in vulnerabilities:
@@ -178,12 +215,25 @@ def build_dynamic_targets(
         if route is None:
             continue
 
+        dynamic_rule_id = STATIC_TO_DYNAMIC_RULE_MAP[rule_id]
+        url = urljoin(base_url.rstrip("/") + "/", route.path.lstrip("/"))
+
+        if dynamic_rule_id in _PARAM_DEPENDENT_DYNAMIC_RULES:
+            source_label = (vuln.get("evidence") or {}).get("source", "")
+            param_name = _extract_param_name(source_label)
+            if param_name is None:
+                # No fixed candidate-param list for these two (see module
+                # docstring) — a bare route URL would only ever come back
+                # NOT_TESTED, so skip rather than produce a useless target.
+                continue
+            url = f"{url}?{urlencode({param_name: '1'})}"
+
         targets.append(BridgeTarget(
             static_finding_id=vuln.get("id", ""),
             static_rule_id=rule_id,
-            dynamic_rule_id=STATIC_TO_DYNAMIC_RULE_MAP[rule_id],
+            dynamic_rule_id=dynamic_rule_id,
             asvs_controls=vuln.get("asvs_controls", []),
-            url=urljoin(base_url.rstrip("/") + "/", route.path.lstrip("/")),
+            url=url,
             method=route.method,
             source_file=file_path,
             source_line=line_no,

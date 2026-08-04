@@ -53,5 +53,22 @@
     "cwe": "CWE-306",
     "severity": "high",
     "description": "Requests the target once through the scan's authenticated session, then again with no credentials at all. If the anonymous request also returns 2xx where the authenticated one did, the endpoint doesn't appear to actually require authentication — forced-browsing / missing function-level access control. Only runs when the scan has an authenticated session configured; otherwise there's nothing to compare against."
+  },
+  "REFLECTED_XSS_LIVE": {
+    "check_type": "payload",
+    "asvs_controls": ["V1.2.1"],
+    "owasp": "A03:2021-Injection",
+    "cwe": "CWE-79",
+    "severity": "high",
+    "description": "Replays each query parameter the URL already carries (e.g. crawler-discovered /search?q=...) with a unique inert marker tag, then checks whether it comes back unescaped. Live-exploitability check for the same control the static XSS taint rule flags at the source level. Only tests params the URL already has — unlike OPEN_REDIRECT_LIVE/CRLF_HEADER_REFLECTION, reflected XSS has no small fixed universe of semantically-meaningful param names to guess blindly."
+  },
+  "SQL_INJECTION_LIVE": {
+    "check_type": "payload",
+    "asvs_controls": ["V1.2.4"],
+    "owasp": "A03:2021-Injection",
+    "cwe": "CWE-89",
+    "severity": "critical",
+    "requires_active_mode": true,
+    "description": "For each query parameter the URL already carries, appends an always-true (' OR '1'='1) and an always-false (' OR '1'='2) SQL boolean to the existing value and compares the two responses — a real unparameterized query returns visibly different results for the two, or leaks a DB driver error message outright. Live-exploitability check for the same control the static SQL_INJECTION taint rule flags at the source level. Gated behind active_mode: on a write-context param these payloads reach a real query, same risk class as CSRF_TOKEN_NOT_VALIDATED."
   }
 }

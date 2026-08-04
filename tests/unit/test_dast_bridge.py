@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.domain.analysis.dast.bridge import build_dynamic_targets, find_enclosing_route
+from app.domain.analysis.dast.bridge import _extract_param_name, build_dynamic_targets, find_enclosing_route
 
 
 FLASK_SOURCE = """\
@@ -13,6 +13,30 @@ app = Flask(__name__)
 def go():
     target = request.args.get("next")
     return redirect(target)
+"""
+
+FLASK_SEARCH_SOURCE = """\
+from flask import Flask, request
+
+app = Flask(__name__)
+
+
+@app.route("/search")
+def search():
+    q = request.args.get("q")
+    return render_results(q)
+"""
+
+FLASK_PRODUCTS_SOURCE = """\
+from flask import Flask, request
+
+app = Flask(__name__)
+
+
+@app.route("/products")
+def products():
+    product_id = request.args.get("id")
+    return run_query(product_id)
 """
 
 FASTAPI_SOURCE = """\
@@ -37,12 +61,13 @@ app.get('/redirect', (req, res) => {
 """
 
 
-def _make_vuln(rule_id, file_path, start_line, controls=None, finding_id="v1"):
+def _make_vuln(rule_id, file_path, start_line, controls=None, finding_id="v1", source=""):
     return {
         "id": finding_id,
         "rule_id": rule_id,
         "asvs_controls": controls or ["V3.7.2"],
         "location": {"file": file_path, "start_line": start_line, "end_line": start_line},
+        "evidence": {"source": source},
     }
 
 
@@ -103,7 +128,38 @@ class TestBuildDynamicTargets:
 
     def test_unmapped_rule_is_skipped(self, tmp_path: Path):
         (tmp_path / "app.py").write_text(FLASK_SOURCE, encoding="utf-8")
-        vulns = [_make_vuln("SQL_INJECTION", "app.py", 9)]
+        vulns = [_make_vuln("BROKEN_ACCESS_CONTROL", "app.py", 9)]
+
+        assert build_dynamic_targets(vulns, tmp_path, "https://target.example") == []
+
+    def test_maps_xss_to_reflected_xss_live(self, tmp_path: Path):
+        (tmp_path / "app.py").write_text(FLASK_SEARCH_SOURCE, encoding="utf-8")
+        vulns = [_make_vuln("XSS", "app.py", 8, controls=["V1.2.1"], source="request.args.get('q')")]
+
+        targets = build_dynamic_targets(vulns, tmp_path, "https://target.example")
+
+        assert len(targets) == 1
+        t = targets[0]
+        assert t.dynamic_rule_id == "REFLECTED_XSS_LIVE"
+        assert t.url == "https://target.example/search?q=1"
+
+    def test_maps_sql_injection_to_sql_injection_live(self, tmp_path: Path):
+        (tmp_path / "app.py").write_text(FLASK_PRODUCTS_SOURCE, encoding="utf-8")
+        vulns = [_make_vuln("SQL_INJECTION", "app.py", 8, controls=["V1.2.4"], source="request.args.get('id')")]
+
+        targets = build_dynamic_targets(vulns, tmp_path, "https://target.example")
+
+        assert len(targets) == 1
+        t = targets[0]
+        assert t.dynamic_rule_id == "SQL_INJECTION_LIVE"
+        assert t.url == "https://target.example/products?id=1"
+
+    def test_param_dependent_rule_skipped_without_extractable_param(self, tmp_path: Path):
+        # Route resolves fine, but the source label doesn't match any known
+        # "read a query param" idiom — a bare route URL would only ever
+        # come back NOT_TESTED for REFLECTED_XSS_LIVE, so no target at all.
+        (tmp_path / "app.py").write_text(FLASK_SEARCH_SOURCE, encoding="utf-8")
+        vulns = [_make_vuln("XSS", "app.py", 8, source="some_custom_input_source()")]
 
         assert build_dynamic_targets(vulns, tmp_path, "https://target.example") == []
 
@@ -128,3 +184,26 @@ class TestBuildDynamicTargets:
         vulns = [{"id": "v1", "rule_id": "UNVALIDATED_REDIRECT", "asvs_controls": [], "location": {}}]
 
         assert build_dynamic_targets(vulns, tmp_path, "https://target.example") == []
+
+
+class TestExtractParamName:
+    def test_flask_args_get(self):
+        assert _extract_param_name("request.args.get('q')") == "q"
+
+    def test_flask_args_getitem(self):
+        assert _extract_param_name('request.args["search"]') == "search"
+
+    def test_django_get_get(self):
+        assert _extract_param_name("request.GET.get('term')") == "term"
+
+    def test_express_query_dot_access(self):
+        assert _extract_param_name("req.query.keyword") == "keyword"
+
+    def test_express_query_getitem(self):
+        assert _extract_param_name("req.query['id']") == "id"
+
+    def test_express_params_dot_access(self):
+        assert _extract_param_name("req.params.id") == "id"
+
+    def test_unrecognized_source_returns_none(self):
+        assert _extract_param_name("some_custom_input_source()") is None

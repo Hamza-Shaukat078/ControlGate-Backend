@@ -38,6 +38,22 @@ OWNER_BEARER_TOKEN = "owner-secret-token"
 # what /transfer-safe checks the submitted csrf_token against.
 CSRF_TOKEN_VALUE = "server-csrf-value"
 
+# Fake "table" for the /products SQLi routes.
+_PRODUCTS = {"1": "Widget", "2": "Gadget", "3": "Gizmo"}
+
+
+def _simulate_unescaped_query(raw_value: str) -> list:
+    """Simulates SELECT * FROM products WHERE id = '<raw_value>' with no
+    escaping at all — a literal single quote in raw_value terminates the
+    string early and whatever follows is evaluated as SQL, exactly like a
+    real string-concatenated (non-parameterized) query would behave."""
+    if "' OR '1'='1" in raw_value:
+        return list(_PRODUCTS.values())  # always-true clause -> every row
+    if "' OR '1'='2" in raw_value:
+        return []  # always-false clause -> no rows
+    exact_id = raw_value.split("'")[0]
+    return [_PRODUCTS[exact_id]] if exact_id in _PRODUCTS else []
+
 
 class VulnHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -157,6 +173,37 @@ class VulnHandler(BaseHTTPRequestHandler):
         if path == "/admin-open":
             # Vulnerable on purpose: no auth check at all, forced-browsing works.
             self._send(200, b"admin panel")
+            return
+
+        if path == "/search":
+            # Vulnerable on purpose: 'q' rendered straight into the page, no escaping.
+            q = qs.get("q", [""])[0]
+            body = f"<html><body>Results for: {q}</body></html>".encode()
+            self._send(200, body)
+            return
+
+        if path == "/search-safe":
+            q = qs.get("q", [""])[0]
+            escaped = q.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+            body = f"<html><body>Results for: {escaped}</body></html>".encode()
+            self._send(200, body)
+            return
+
+        if path == "/products":
+            # Vulnerable on purpose: id concatenated into a query with no escaping.
+            raw = qs.get("id", [""])[0]
+            rows = _simulate_unescaped_query(raw)
+            body = f"<html><body>Found {len(rows)} product(s): {', '.join(rows)}</body></html>".encode()
+            self._send(200, body)
+            return
+
+        if path == "/products-safe":
+            # Parameterized: the whole raw value is the literal id, injection
+            # payloads never match a real row either way.
+            raw = qs.get("id", [""])[0]
+            row = _PRODUCTS.get(raw)
+            body = f"<html><body>Found {'1' if row else '0'} product(s): {row or ''}</body></html>".encode()
+            self._send(200, body)
             return
 
         if path == "/comment-form":

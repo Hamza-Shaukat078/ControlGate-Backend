@@ -9,7 +9,7 @@ import secrets
 import socket
 import ssl
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 from app.domain.analysis.dast.findings import DynamicFinding
 from app.domain.analysis.dast.rule_loader import DynamicQueryRule, load_dynamic_queries
@@ -20,6 +20,17 @@ logger = logging.getLogger(__name__)
 
 _BLOCKED_STATUS_CODES = {400, 403, 404}
 _REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
+
+# Substrings of real DB error output — same "well-known engine signature"
+# idea as _CSRF_NAME_HINTS below, not an exhaustive list.
+_SQL_ERROR_SIGNATURES = (
+    "sql syntax", "you have an error in your sql syntax", "mysql_fetch",
+    "warning: mysqli", "unclosed quotation mark", "quoted string not properly terminated",
+    "sqlite3.operationalerror", "sqlite error", "unrecognized token",
+    "pg_query", "postgresql", "syntax error at or near",
+    "ora-00933", "ora-01756", "ora-00936",
+    "unterminated quoted string", "microsoft odbc",
+)
 
 # Same regex weight class as crawler.py — good enough to find *a* state-changing
 # form and its fields, not a full HTML parser.
@@ -445,6 +456,159 @@ async def _check_unauthenticated_access(
     )
 
 
+async def _check_reflected_xss(session: DastSession, target_url: str, rule: DynamicQueryRule) -> DynamicFinding:
+    """Track A1 — V1.2.1. Unlike OPEN_REDIRECT_LIVE/CRLF_HEADER_REFLECTION,
+    reflected XSS has no small fixed universe of semantically-meaningful
+    param names to guess blindly (a redirect param is almost always named
+    next/redirect/url/...; a reflection sink could be any param at all) —
+    guessing common names against every crawled URL would mostly just
+    produce NOT_TESTED noise. Instead this only replays params the URL
+    already carries (crawler-discovered query strings, e.g. /search?q=...),
+    same marker-tag technique xss_probe.py uses for stored XSS.
+    """
+    control_id = rule.asvs_controls[0] if rule.asvs_controls else rule.rule_id
+    marker = f"dastxss{secrets.token_hex(4)}"
+    payload = f'"><dastxss id="{marker}">probe</dastxss>'
+
+    query_params = list(parse_qs(urlsplit(target_url).query).keys())
+    if not query_params:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note="URL has no query parameters to test for reflection",
+            confidence=0.15,
+        )
+
+    observed_response = False
+    for param in query_params:
+        try:
+            resp = await session.request("GET", target_url, params={param: payload})
+        except Exception:
+            continue
+        if resp.status_code == 404:
+            continue
+        observed_response = True
+        if payload in resp.text:
+            return DynamicFinding(
+                control_id=control_id, verdict=Verdict.FAIL, rule_id=rule.rule_id, severity=rule.severity,
+                url=str(resp.request.url), method="GET",
+                note=f"Marker payload reflected unescaped via query param '{param}' — user input reaches "
+                     f"the response body without HTML-encoding",
+                confidence=0.7,
+            )
+
+    if observed_response:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.PASS, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note="No query parameter reflected the marker payload unescaped",
+            confidence=0.5,
+        )
+    return DynamicFinding(
+        control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+        url=target_url, method="GET",
+        note="Could not reach the target with any of its own query parameters", confidence=0.2,
+    )
+
+
+def _looks_like_sql_error(text: str) -> bool:
+    lowered = text.lower()
+    return any(sig in lowered for sig in _SQL_ERROR_SIGNATURES)
+
+
+def _responses_differ_significantly(a: str, b: str) -> bool:
+    # Same class of heuristic as DOUBLE_DECODE_BYPASS's status-pair
+    # comparison — a real query returning a different row set for a
+    # true-vs-false WHERE clause usually changes response size noticeably;
+    # an app treating the payload as an inert string returns near-identical
+    # bodies either way.
+    diff = abs(len(a) - len(b))
+    return diff > max(20, 0.15 * max(len(a), len(b), 1))
+
+
+async def _check_sql_injection(session: DastSession, target_url: str, rule: DynamicQueryRule) -> DynamicFinding:
+    """Track A3 — V1.2.4. Same reasoning as REFLECTED_XSS_LIVE for why this
+    only tests params the URL already carries rather than guessing common
+    names: SQLi has no small fixed universe of semantically-meaningful
+    param names either.
+
+    Two signals, checked per candidate param:
+      1. Error-based (strong): a single quote reaching a query un-escaped
+         often surfaces the DB driver's own syntax-error text verbatim.
+      2. Boolean-blind (weaker): "<value>' OR '1'='1" (always-true) vs.
+         "<value>' OR '1'='2" (always-false) appended to the existing
+         value — a real, unparameterized query returns visibly different
+         result sets for the two; a safely-parameterized one treats both
+         as the same literal string and returns identical responses.
+
+    requires_active_mode in dynamic_queries.json: unlike the read-only
+    REFLECTED_XSS_LIVE, these payloads reach a real query — on a
+    write-context param (not just SELECT-shaped ones) that's a real
+    state-changing risk, same class as CSRF_TOKEN_NOT_VALIDATED.
+    """
+    control_id = rule.asvs_controls[0] if rule.asvs_controls else rule.rule_id
+
+    query_params = parse_qs(urlsplit(target_url).query)
+    if not query_params:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note="URL has no query parameters to test", confidence=0.15,
+        )
+
+    observed_response = False
+    for param, values in query_params.items():
+        original_value = values[0] if values else ""
+        true_value = f"{original_value}' OR '1'='1"
+        false_value = f"{original_value}' OR '1'='2"
+
+        try:
+            true_resp = await session.request("GET", target_url, params={param: true_value})
+            false_resp = await session.request("GET", target_url, params={param: false_value})
+        except Exception:
+            continue
+        if true_resp.status_code == 404 and false_resp.status_code == 404:
+            continue
+        observed_response = True
+
+        if _looks_like_sql_error(true_resp.text) or _looks_like_sql_error(false_resp.text):
+            return DynamicFinding(
+                control_id=control_id, verdict=Verdict.FAIL, rule_id=rule.rule_id, severity=rule.severity,
+                url=str(true_resp.request.url), method="GET",
+                note=f"A single-quote-bearing payload in query param '{param}' produced a response "
+                     f"containing database error text — the value reaches a query unescaped",
+                confidence=0.75,
+            )
+
+        if (
+            true_resp.status_code == false_resp.status_code
+            and _responses_differ_significantly(true_resp.text, false_resp.text)
+        ):
+            return DynamicFinding(
+                control_id=control_id, verdict=Verdict.FAIL, rule_id=rule.rule_id, severity=rule.severity,
+                url=str(true_resp.request.url), method="GET",
+                note=f"Query param '{param}': an always-true and an always-false SQL boolean appended "
+                     f"to the same value produced visibly different responses (same status "
+                     f"{true_resp.status_code}, body lengths {len(true_resp.text)} vs "
+                     f"{len(false_resp.text)}) — evidence the value reaches an unparameterized query "
+                     f"(a single test run; not a confirmed exploit chain)",
+                confidence=0.55,
+            )
+
+    if observed_response:
+        return DynamicFinding(
+            control_id=control_id, verdict=Verdict.PASS, rule_id=rule.rule_id, severity=rule.severity,
+            url=target_url, method="GET",
+            note="No query parameter showed a SQL error or a true/false boolean response difference",
+            confidence=0.45,
+        )
+    return DynamicFinding(
+        control_id=control_id, verdict=Verdict.NOT_TESTED, rule_id=rule.rule_id, severity=rule.severity,
+        url=target_url, method="GET",
+        note="Could not reach the target with any of its own query parameters", confidence=0.2,
+    )
+
+
 _CHECK_FUNCTIONS = {
     "DOUBLE_DECODE_BYPASS": _check_double_decode_bypass,
     "CRLF_HEADER_REFLECTION": _check_crlf_header_reflection,
@@ -452,6 +616,8 @@ _CHECK_FUNCTIONS = {
     "REQUEST_SMUGGLING": _check_request_smuggling,
     "CSRF_TOKEN_NOT_VALIDATED": _check_csrf_token_validation,
     "UNAUTHENTICATED_ACCESS_ALLOWED": _check_unauthenticated_access,
+    "REFLECTED_XSS_LIVE": _check_reflected_xss,
+    "SQL_INJECTION_LIVE": _check_sql_injection,
 }
 
 

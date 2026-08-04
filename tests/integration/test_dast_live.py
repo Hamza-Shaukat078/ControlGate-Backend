@@ -271,3 +271,47 @@ class TestStoredXssProbeLive:
                 session, form, [base_url + "/comment-wall"], active_mode=True,
             )
         assert finding.verdict == Verdict.FAIL
+
+
+class TestReflectedXssLive:
+    async def test_unescaped_search_fails(self, base_url):
+        async with await _session() as session:
+            findings = await run_payload_checks(session, base_url + "/search?q=hello", RULES)
+        finding = next(f for f in findings if f.rule_id == "REFLECTED_XSS_LIVE")
+        assert finding.verdict == Verdict.FAIL
+
+    async def test_escaped_search_passes(self, base_url):
+        async with await _session() as session:
+            findings = await run_payload_checks(session, base_url + "/search-safe?q=hello", RULES)
+        finding = next(f for f in findings if f.rule_id == "REFLECTED_XSS_LIVE")
+        assert finding.verdict == Verdict.PASS
+
+    async def test_no_query_string_is_not_tested(self, base_url):
+        async with await _session() as session:
+            findings = await run_payload_checks(session, base_url + "/page1", RULES)
+        finding = next(f for f in findings if f.rule_id == "REFLECTED_XSS_LIVE")
+        assert finding.verdict == Verdict.NOT_TESTED
+
+
+class TestSqlInjectionLive:
+    async def test_unescaped_query_fails(self, base_url):
+        async with await _session() as session:
+            findings = await run_payload_checks(
+                session, base_url + "/products?id=1", RULES, active_mode=True,
+            )
+        finding = next(f for f in findings if f.rule_id == "SQL_INJECTION_LIVE")
+        assert finding.verdict == Verdict.FAIL
+
+    async def test_parameterized_query_passes(self, base_url):
+        async with await _session() as session:
+            findings = await run_payload_checks(
+                session, base_url + "/products-safe?id=1", RULES, active_mode=True,
+            )
+        finding = next(f for f in findings if f.rule_id == "SQL_INJECTION_LIVE")
+        assert finding.verdict == Verdict.PASS
+
+    async def test_skipped_without_active_mode(self, base_url):
+        async with await _session() as session:
+            findings = await run_payload_checks(session, base_url + "/products?id=1", RULES, active_mode=False)
+        finding = next(f for f in findings if f.rule_id == "SQL_INJECTION_LIVE")
+        assert finding.verdict == Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
