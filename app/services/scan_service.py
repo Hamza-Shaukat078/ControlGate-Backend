@@ -613,6 +613,7 @@ class ScanService:
         dynamic_second_actor_form_login: Optional[dict] = None,
         dynamic_scenarios: Optional[list[dict]] = None,
         dynamic_race_probes: Optional[list[dict]] = None,
+        bridge_targets: Optional[list] = None,
     ) -> tuple[list[dict], list[dict]]:
         from app.domain.analysis.dast.api_scenario import build_scenario_from_request
         from app.domain.analysis.dast.checks import run_payload_checks
@@ -624,6 +625,7 @@ class ScanService:
             discover_logout_url,
         )
         from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
+        from app.domain.analysis.dast.rule_loader import load_dynamic_queries
         from app.domain.analysis.dast.scenario_runner import run_scenario
         from app.domain.analysis.dast.session import DastSessionPair
         from app.domain.analysis.dast.verdict import Verdict
@@ -674,6 +676,35 @@ class ScanService:
                     run_payload_checks(pair.primary, check_urls, active_mode=dynamic_active_mode),
                     timeout=60.0,
                 )
+
+                # Bridge targets (app/domain/analysis/dast/bridge.py): specific
+                # routes a *static* finding flagged, re-tested live with the one
+                # dynamic rule that matches that static rule_id — independent of
+                # whatever the crawler happened to discover on its own.
+                bridge_rules = load_dynamic_queries() if bridge_targets else {}
+                for target in (bridge_targets or []):
+                    rule = bridge_rules.get(target.dynamic_rule_id)
+                    if rule is None:
+                        continue
+                    try:
+                        bridge_results = await asyncio.wait_for(
+                            run_payload_checks(
+                                pair.primary, target.url, {target.dynamic_rule_id: rule},
+                                active_mode=dynamic_active_mode,
+                            ),
+                            timeout=15.0,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"[scan:{scan_id}] Bridge check {target.dynamic_rule_id} "
+                            f"failed for {target.url}: {exc}"
+                        )
+                        continue
+                    for finding in bridge_results:
+                        finding.evidence = (
+                            f"bridge:{target.static_finding_id}:{target.source_file}:{target.source_line}"
+                        )
+                    findings.extend(bridge_results)
 
                 if auth_mode != AuthMode.NONE:
                     logout_url = await discover_logout_url(pair.primary, target_url)
@@ -1002,13 +1033,20 @@ class ScanService:
             dynamic_findings: list[dict] = []
             discovered_forms: list[dict] = []
             if scan_type == "hybrid" and target_url:
+                # bridge.py resolves the specific route a static finding flagged
+                # (for the rule_ids it knows a live-check counterpart for) so
+                # those exact findings get re-tested against their own URL below,
+                # not only whatever the crawler happens to stumble onto.
+                from app.domain.analysis.dast.bridge import build_dynamic_targets
+                bridge_targets = build_dynamic_targets(vulnerabilities, repo_root, target_url)
+
                 try:
                     dynamic_findings, discovered_forms = await asyncio.wait_for(
                         self._run_dynamic_checks(
                             scan_id, target_url, dynamic_auth_mode, dynamic_bearer_token,
                             dynamic_form_login, dynamic_active_mode, dynamic_second_actor_auth_mode,
                             dynamic_second_actor_bearer_token, dynamic_second_actor_form_login,
-                            dynamic_scenarios, dynamic_race_probes,
+                            dynamic_scenarios, dynamic_race_probes, bridge_targets,
                         ),
                         timeout=120.0,
                     )
@@ -1017,12 +1055,10 @@ class ScanService:
                 except Exception as exc:
                     logger.warning(f"[scan:{scan_id}] Hybrid dynamic checks failed (non-blocking): {exc}")
 
-                # Basic correlation: annotate findings that share an ASVS control
-                # between the two engines. This does not (yet) map a specific
-                # static taint sink to a specific live endpoint — that needs
-                # framework route introspection this backend doesn't have — but
-                # "both engines independently flagged the same control" is still
-                # a real, useful triage signal (higher-confidence finding).
+                # Coarse correlation: annotate findings that share an ASVS control
+                # between the two engines, even when neither is a bridge finding —
+                # "both engines independently flagged the same control" is still a
+                # real, useful triage signal (higher-confidence finding).
                 static_controls = set()
                 for v in vulnerabilities:
                     static_controls.update(v.get("asvs_controls") or [])
@@ -1036,6 +1072,22 @@ class ScanService:
                 for v in vulnerabilities:
                     if dynamic_fail_controls & set(v.get("asvs_controls") or []):
                         v["dynamic_confirmed"] = True
+
+                # Precise correlation: a bridge finding's evidence carries the
+                # exact static finding id it was generated from
+                # (DastSession.request()'s "bridge:<id>:<file>:<line>" tag set
+                # in _run_dynamic_checks), so a FAIL here confirms that specific
+                # static vulnerability was re-tested live, not merely "some
+                # finding shares this control".
+                bridge_confirmed_ids = set()
+                for finding in dynamic_findings:
+                    evidence = finding.get("evidence") or ""
+                    if finding["verdict"] == "fail" and evidence.startswith("bridge:"):
+                        bridge_confirmed_ids.add(evidence.split(":", 3)[1])
+                for v in vulnerabilities:
+                    if v.get("id") in bridge_confirmed_ids:
+                        v["dynamic_confirmed"] = True
+                        v["bridge_confirmed"] = True
 
                 for finding in dynamic_findings:
                     if finding["verdict"] == "fail":
