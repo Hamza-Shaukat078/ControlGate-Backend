@@ -37,6 +37,7 @@ class DastSession:
         self._timeout = timeout
         self._transport = transport
         self._client = httpx.AsyncClient(timeout=timeout, follow_redirects=True, transport=transport)
+        self._reauth_in_progress = False
         self._secrets: set[str] = set()
         if actor.bearer_token:
             self._secrets.add(actor.bearer_token)
@@ -75,8 +76,32 @@ class DastSession:
         raise ValueError(f"Unknown auth_mode: {actor.auth_mode}")
 
     async def request(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """Track C4 — a form_login session can outlive a long crawl. A 401
+        here (only 401 — "Unauthorized"/session-not-valid, not 403
+        "Forbidden"/genuinely-denied, which several checks legitimately
+        expect and shouldn't have silently retried out from under them,
+        e.g. IDOR/UNAUTHENTICATED_ACCESS_ALLOWED) triggers exactly one
+        re-login + retry. Bearer sessions can't meaningfully "refresh" (no
+        refresh-token concept in ActorConfig) so this only applies to
+        form_login. _reauth_in_progress guards against looping if the
+        re-login itself keeps failing (credentials actually revoked, not
+        just an expired session) — a second failure propagates normally,
+        same as before this existed.
+        """
         validate_public_http_url(url, allow_http=self._allow_http, resolve=self._resolve)
-        return await self._client.request(method, url, **kwargs)
+        resp = await self._client.request(method, url, **kwargs)
+        if (
+            resp.status_code == 401
+            and self._actor.auth_mode == AuthMode.FORM_LOGIN
+            and not self._reauth_in_progress
+        ):
+            self._reauth_in_progress = True
+            try:
+                await self._authenticate()
+            finally:
+                self._reauth_in_progress = False
+            resp = await self._client.request(method, url, **kwargs)
+        return resp
 
     @property
     def is_authenticated(self) -> bool:

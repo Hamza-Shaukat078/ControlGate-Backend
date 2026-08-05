@@ -39,6 +39,15 @@ OWNER_BEARER_TOKEN = "owner-secret-token"
 # what /transfer-safe checks the submitted csrf_token against.
 CSRF_TOKEN_VALUE = "server-csrf-value"
 
+# Credentials /login accepts. /protected-data's session expires (goes back to
+# 401) after this many successful accesses, to back Track C4's re-auth test —
+# a fresh /login call issues a new session that's good for another
+# _LOGIN_EXPIRE_AFTER requests.
+LOGIN_USERNAME = "alice"
+LOGIN_PASSWORD = "hunter2"
+_LOGIN_EXPIRE_AFTER = 2
+_login_state = {"login_count": 0, "current_session": None, "successes_this_session": 0}
+
 # Fake "table" for the /products SQLi routes.
 _PRODUCTS = {"1": "Widget", "2": "Gadget", "3": "Gizmo"}
 
@@ -283,12 +292,40 @@ class VulnHandler(BaseHTTPRequestHandler):
             self._send(200, b"fetching arbitrary URLs is not supported")
             return
 
+        if path == "/protected-data":
+            cookie_header = self.headers.get("Cookie", "")
+            current = _login_state["current_session"]
+            if not (current and current in cookie_header):
+                self._send(401, b'{"error": "unauthorized"}', content_type="application/json")
+                return
+            if _login_state["successes_this_session"] >= _LOGIN_EXPIRE_AFTER:
+                # Session "expired" — a real login is required again.
+                self._send(401, b'{"error": "session expired"}', content_type="application/json")
+                return
+            _login_state["successes_this_session"] += 1
+            self._send(200, b'{"ok": true}', content_type="application/json")
+            return
+
         self._send(404, b"not found")
 
     def do_POST(self):
         path = urlsplit(self.path).path
         length = int(self.headers.get("Content-Length", 0))
         body_bytes = self.rfile.read(length) if length else b""
+
+        if path == "/login":
+            posted = parse_qs(body_bytes.decode("utf-8", errors="replace"))
+            username = posted.get("username", [""])[0]
+            password = posted.get("password", [""])[0]
+            if username == LOGIN_USERNAME and password == LOGIN_PASSWORD:
+                _login_state["login_count"] += 1
+                token = f"session-{_login_state['login_count']}"
+                _login_state["current_session"] = token
+                _login_state["successes_this_session"] = 0
+                self._send(200, b"ok", extra_headers=[("Set-Cookie", f"session={token}; Path=/")])
+            else:
+                self._send(401, b"bad credentials")
+            return
 
         if path == "/transfer":
             # Vulnerable on purpose: accepts the transfer regardless of
@@ -363,6 +400,11 @@ class VulnFixtureServer:
     def reset_comment_state(self):
         _comment_state["vulnerable"] = ""
         _comment_state["safe"] = ""
+
+    def reset_login_state(self):
+        _login_state["login_count"] = 0
+        _login_state["current_session"] = None
+        _login_state["successes_this_session"] = 0
 
     def __enter__(self) -> "VulnFixtureServer":
         self._thread.start()

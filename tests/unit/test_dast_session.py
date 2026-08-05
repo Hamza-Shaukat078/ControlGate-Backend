@@ -133,6 +133,100 @@ class TestRedaction:
             assert "abc123" not in session.redact("Cookie: session=abc123")
 
 
+class TestSessionRefresh:
+    """Track C4 — a form_login session that gets a 401 mid-scan re-logs-in
+    and retries the original request exactly once."""
+
+    @staticmethod
+    def _expiring_session_transport(*, expire_after: int, login_calls: list) -> httpx.MockTransport:
+        state = {"login_count": 0, "current_session": None, "successes_this_session": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/login":
+                state["login_count"] += 1
+                login_calls.append(state["login_count"])
+                state["current_session"] = f"session-{state['login_count']}"
+                state["successes_this_session"] = 0
+                return httpx.Response(200, headers={"set-cookie": f"session={state['current_session']}; Path=/"})
+
+            cookie = request.headers.get("cookie", "")
+            if state["current_session"] and state["current_session"] in cookie:
+                if state["successes_this_session"] >= expire_after:
+                    return httpx.Response(401, json={"error": "expired"})
+                state["successes_this_session"] += 1
+                return httpx.Response(200, json={"ok": True})
+            return httpx.Response(401, json={"error": "unauthorized"})
+
+        return httpx.MockTransport(handler)
+
+    def _form(self) -> FormLoginConfig:
+        return FormLoginConfig(
+            login_url="https://target.example/login",
+            username_field="user", password_field="pass",
+            username="alice", password="hunter2",
+        )
+
+    @pytest.mark.asyncio
+    async def test_expired_session_triggers_reauth_and_retry_succeeds(self):
+        login_calls: list = []
+        transport = self._expiring_session_transport(expire_after=1, login_calls=login_calls)
+        actor = ActorConfig(auth_mode=AuthMode.FORM_LOGIN, form_login=self._form())
+        async with DastSession(actor, resolve=False, transport=transport) as session:
+            first = await session.request("GET", "https://target.example/api/data")
+            second = await session.request("GET", "https://target.example/api/data")
+
+        assert first.status_code == 200
+        assert second.status_code == 200  # would be 401 without the C4 re-auth/retry
+        assert login_calls == [1, 2]  # initial login at __aenter__, one re-login on the 401
+
+    @pytest.mark.asyncio
+    async def test_bearer_mode_never_reauths_on_401(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, json={"error": "unauthorized"})
+
+        actor = ActorConfig(auth_mode=AuthMode.BEARER, bearer_token="tok")
+        async with DastSession(actor, resolve=False, transport=httpx.MockTransport(handler)) as session:
+            resp = await session.request("GET", "https://target.example/api/data")
+        assert resp.status_code == 401  # returned as-is, no login_url to even retry against
+
+    @pytest.mark.asyncio
+    async def test_reauth_failure_propagates(self):
+        actor = ActorConfig(auth_mode=AuthMode.FORM_LOGIN, form_login=self._form())
+        # __aenter__'s own initial login must succeed for the session to exist at all;
+        # the re-auth attempt triggered by the 401 below is the one that fails.
+        login_attempts = {"count": 0}
+
+        def two_stage_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/login":
+                login_attempts["count"] += 1
+                if login_attempts["count"] == 1:
+                    return httpx.Response(200, headers={"set-cookie": "session=abc; Path=/"})
+                return httpx.Response(500)
+            return httpx.Response(401)
+
+        async with DastSession(actor, resolve=False, transport=httpx.MockTransport(two_stage_handler)) as session:
+            with pytest.raises(httpx.HTTPStatusError):
+                await session.request("GET", "https://target.example/api/data")
+        assert login_attempts["count"] == 2  # initial + one failed re-auth attempt, no more
+
+    @pytest.mark.asyncio
+    async def test_retry_only_attempted_once_even_if_it_also_401s(self):
+        login_calls: list = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/login":
+                login_calls.append(1)
+                return httpx.Response(200, headers={"set-cookie": "session=abc; Path=/"})
+            return httpx.Response(401)  # every protected request 401s, even after re-login
+
+        actor = ActorConfig(auth_mode=AuthMode.FORM_LOGIN, form_login=self._form())
+        async with DastSession(actor, resolve=False, transport=httpx.MockTransport(handler)) as session:
+            resp = await session.request("GET", "https://target.example/api/data")
+
+        assert resp.status_code == 401  # final response returned, not swallowed
+        assert len(login_calls) == 2  # initial __aenter__ login + exactly one re-auth, no loop
+
+
 class TestSessionPair:
     @pytest.mark.asyncio
     async def test_second_actor_holds_independent_session(self):

@@ -19,7 +19,7 @@ import pytest
 from app.domain.analysis.dast import session as session_module
 from app.domain.analysis.dast.checks import run_payload_checks
 from app.domain.analysis.dast.collaborator import CollaboratorServer
-from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig
+from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig, FormLoginConfig
 from app.domain.analysis.dast.crawler import DiscoveredForm, crawl
 from app.domain.analysis.dast.idor_probe import IdorProbeConfig, run_idor_probe
 from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
@@ -28,7 +28,12 @@ from app.domain.analysis.dast.session import DastSession, DastSessionPair
 from app.domain.analysis.dast.ssrf_probe import run_ssrf_probe
 from app.domain.analysis.dast.verdict import Verdict
 from app.domain.analysis.dast.xss_probe import run_stored_xss_probe
-from tests.fixtures.dast_vuln_server import OWNER_BEARER_TOKEN, VulnFixtureServer
+from tests.fixtures.dast_vuln_server import (
+    LOGIN_PASSWORD,
+    LOGIN_USERNAME,
+    OWNER_BEARER_TOKEN,
+    VulnFixtureServer,
+)
 
 RULES = load_dynamic_queries(Path(__file__).resolve().parents[2] / "queries" / "dynamic_queries.json")
 
@@ -348,3 +353,25 @@ class TestSsrfProbeLive:
             async with await _session() as session:
                 finding = await run_ssrf_probe(session, base_url + "/fetch", collab, candidate_params=["url"])
         assert finding.verdict == Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+
+class TestSessionRefreshLive:
+    # /protected-data's session expires after 2 successful accesses
+    # (dast_vuln_server.py's _LOGIN_EXPIRE_AFTER) — the 3rd request here
+    # would come back 401 without Track C4's real re-login-and-retry over
+    # an actual socket.
+    async def test_expired_session_is_transparently_refreshed(self, base_url, live_server):
+        live_server.reset_login_state()
+        form = FormLoginConfig(
+            login_url=base_url + "/login", username_field="username", password_field="password",
+            username=LOGIN_USERNAME, password=LOGIN_PASSWORD,
+        )
+        actor = ActorConfig(auth_mode=AuthMode.FORM_LOGIN, form_login=form)
+        async with DastSession(actor) as session:
+            r1 = await session.request("GET", base_url + "/protected-data")
+            r2 = await session.request("GET", base_url + "/protected-data")
+            r3 = await session.request("GET", base_url + "/protected-data")
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert r3.status_code == 200
