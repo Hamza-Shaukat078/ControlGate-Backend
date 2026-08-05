@@ -54,8 +54,14 @@ class _FakeCollaboratorServer:
     def hits_for(self, token: str) -> list:
         return []
 
-    def __enter__(self) -> "_FakeCollaboratorServer":
+    def start(self) -> "_FakeCollaboratorServer":
         return self
+
+    def stop(self) -> None:
+        pass
+
+    def __enter__(self) -> "_FakeCollaboratorServer":
+        return self.start()
 
     def __exit__(self, *exc_info) -> bool:
         return False
@@ -820,3 +826,59 @@ class TestSsrfProbeWiring:
             await svc._run_dynamic_scan("scan-34", TARGET, dynamic_active_mode=True)
 
         assert run_ssrf_probe_mock.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_bridge_ssrf_target_uses_run_ssrf_probe_not_payload_checks(self):
+        # bridge.py maps static SSRF findings to SSRF_LIVE, but that rule
+        # isn't a checks.py payload check (it needs the collaborator, not
+        # just a rule) — _run_dynamic_checks's bridge loop must special-case
+        # it rather than routing it through run_payload_checks like every
+        # other bridge target.
+        from app.domain.analysis.dast.bridge import BridgeTarget
+
+        svc, db = await _make_service()
+        bridge_target = BridgeTarget(
+            static_finding_id="vuln-1", static_rule_id="SSRF", dynamic_rule_id="SSRF_LIVE",
+            asvs_controls=["V5.3.2"], url=f"{TARGET}/proxy?url=1", method="GET",
+            source_file="app.py", source_line=9,
+        )
+        # Distinct return values per call site (not a shared object) so the
+        # assertions below can unambiguously tell the bridge-triggered call
+        # apart from the general probe-against-crawled-urls loop's own call.
+        def _fake_run_ssrf_probe(session, url, collaborator, **kwargs):
+            if kwargs.get("candidate_params"):
+                return DynamicFinding(
+                    control_id="V5.3.2", verdict=Verdict.FAIL, rule_id="SSRF_LIVE",
+                    url=url, method="GET", note="callback received (bridge)", severity="high",
+                )
+            return DynamicFinding(
+                control_id="V5.3.2", verdict=Verdict.PASS, rule_id="SSRF_LIVE",
+                url=url, method="GET", note="no callback (general loop)", severity="high",
+            )
+
+        run_ssrf_probe_mock = AsyncMock(side_effect=_fake_run_ssrf_probe)
+        run_payload_checks_mock = AsyncMock(return_value=[])
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", run_payload_checks_mock), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.ssrf_probe.run_ssrf_probe", run_ssrf_probe_mock):
+            dynamic_findings, _ = await svc._run_dynamic_checks(
+                "scan-35", TARGET, dynamic_active_mode=True, bridge_targets=[bridge_target],
+            )
+
+        # Called twice: once for the bridge target, once more for the
+        # general probe-against-crawled-urls loop (check_urls defaults to
+        # just [target_url] here since crawl() is mocked empty) — find the
+        # bridge-specific call by its candidate_params kwarg.
+        bridge_calls = [c for c in run_ssrf_probe_mock.await_args_list if c.kwargs.get("candidate_params")]
+        assert len(bridge_calls) == 1
+        assert bridge_calls[0].args[1] == f"{TARGET}/proxy?url=1"
+        assert bridge_calls[0].kwargs["candidate_params"] == ["url"]
+        run_payload_checks_mock.assert_awaited_once()  # only the top-level check_urls call, not the bridge one
+
+        bridge_result = next(
+            f for f in dynamic_findings if f["rule_id"] == "SSRF_LIVE" and f.get("evidence")
+        )
+        assert bridge_result["verdict"] == "fail"
+        assert bridge_result["evidence"] == "bridge:vuln-1:app.py:9"

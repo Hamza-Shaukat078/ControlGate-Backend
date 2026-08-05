@@ -104,10 +104,16 @@ class CollaboratorServer:
         with self._lock:
             return list(self._hits.get(token, []))
 
-    def __enter__(self) -> "CollaboratorServer":
+    def start(self) -> "CollaboratorServer":
         self._thread.start()
         return self
 
-    def __exit__(self, *exc_info) -> None:
+    def stop(self) -> None:
         self._httpd.shutdown()
         self._httpd.server_close()
+
+    def __enter__(self) -> "CollaboratorServer":
+        return self.start()
+
+    def __exit__(self, *exc_info) -> None:
+        self.stop()

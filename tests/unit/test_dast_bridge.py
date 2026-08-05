@@ -39,6 +39,19 @@ def products():
     return run_query(product_id)
 """
 
+FLASK_PROXY_SOURCE = """\
+from flask import Flask, request
+import requests
+
+app = Flask(__name__)
+
+
+@app.route("/proxy")
+def proxy():
+    target = request.args.get("url")
+    return requests.get(target).text
+"""
+
 FASTAPI_SOURCE = """\
 from fastapi import APIRouter
 
@@ -153,6 +166,18 @@ class TestBuildDynamicTargets:
         t = targets[0]
         assert t.dynamic_rule_id == "SQL_INJECTION_LIVE"
         assert t.url == "https://target.example/products?id=1"
+
+    def test_maps_ssrf_to_ssrf_live(self, tmp_path: Path):
+        (tmp_path / "app.py").write_text(FLASK_PROXY_SOURCE, encoding="utf-8")
+        vulns = [_make_vuln("SSRF", "app.py", 9, controls=["V5.3.2"], source="request.args.get('url')")]
+
+        targets = build_dynamic_targets(vulns, tmp_path, "https://target.example")
+
+        assert len(targets) == 1
+        t = targets[0]
+        assert t.dynamic_rule_id == "SSRF_LIVE"
+        assert t.static_rule_id == "SSRF"
+        assert t.url == "https://target.example/proxy?url=1"
 
     def test_param_dependent_rule_skipped_without_extractable_param(self, tmp_path: Path):
         # Route resolves fine, but the source label doesn't match any known

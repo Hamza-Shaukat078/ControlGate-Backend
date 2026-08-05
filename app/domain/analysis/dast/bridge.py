@@ -49,11 +49,16 @@ STATIC_TO_DYNAMIC_RULE_MAP: Dict[str, str] = {
     "HTTP_REQUEST_SMUGGLING": "REQUEST_SMUGGLING",
     "XSS": "REFLECTED_XSS_LIVE",
     "SQL_INJECTION": "SQL_INJECTION_LIVE",
+    # SSRF_LIVE isn't a checks.py payload check (it needs a CollaboratorServer,
+    # not just a session+rule) — scan_service.py's bridge loop special-cases
+    # this dynamic_rule_id rather than routing it through run_payload_checks
+    # like the others above.
+    "SSRF": "SSRF_LIVE",
 }
 
 # Dynamic rule_ids that only test query params a URL already carries — see
 # module docstring. A bridge target for one of these needs a param name.
-_PARAM_DEPENDENT_DYNAMIC_RULES = {"REFLECTED_XSS_LIVE", "SQL_INJECTION_LIVE"}
+_PARAM_DEPENDENT_DYNAMIC_RULES = {"REFLECTED_XSS_LIVE", "SQL_INJECTION_LIVE", "SSRF_LIVE"}
 
 # Common "read a query/GET param" idioms across the languages universal_parser
 # targets — same best-effort spirit as the route regexes below, not a real

@@ -635,8 +635,11 @@ class ScanService:
         dynamic_ssrf_collaborator_port: Optional[int] = None,
         bridge_targets: Optional[list] = None,
     ) -> tuple[list[dict], list[dict]]:
+        from urllib.parse import parse_qs, urlsplit
+
         from app.domain.analysis.dast.api_scenario import build_scenario_from_request
         from app.domain.analysis.dast.checks import run_payload_checks
+        from app.domain.analysis.dast.collaborator import CollaboratorServer
         from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig, FormLoginConfig
         from app.domain.analysis.dast.crawler import crawl
         from app.domain.analysis.dast.findings import DynamicFinding
@@ -648,7 +651,6 @@ class ScanService:
         from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
         from app.domain.analysis.dast.rule_loader import load_dynamic_queries
         from app.domain.analysis.dast.scenario_runner import run_scenario
-        from app.domain.analysis.dast.collaborator import CollaboratorServer
         from app.domain.analysis.dast.session import DastSessionPair
         from app.domain.analysis.dast.ssrf_probe import run_ssrf_probe
         from app.domain.analysis.dast.verdict import Verdict
@@ -752,43 +754,86 @@ class ScanService:
                     timeout=60.0,
                 )
 
+                # SSRF's collaborator (Track A2) is created once up front —
+                # both the bridge loop below (an SSRF-mapped bridge target)
+                # and the general probe-against-crawled-urls loop further
+                # down share the same listener/token namespace, rather than
+                # spinning up a second socket+thread. Only started when
+                # dynamic_active_mode is set: run_ssrf_probe is a no-op
+                # (SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION) without it, so
+                # there's nothing for a listener to catch anyway.
+                collaborator = None
+                if dynamic_active_mode:
+                    collaborator_kwargs: Dict[str, Any] = {}
+                    if dynamic_ssrf_collaborator_host:
+                        collaborator_kwargs["host"] = dynamic_ssrf_collaborator_host
+                    if dynamic_ssrf_collaborator_port:
+                        collaborator_kwargs["port"] = dynamic_ssrf_collaborator_port
+                    collaborator = CollaboratorServer(**collaborator_kwargs).start()
+
                 # Bridge targets (app/domain/analysis/dast/bridge.py): specific
                 # routes a *static* finding flagged, re-tested live with the one
                 # dynamic rule that matches that static rule_id — independent of
                 # whatever the crawler happened to discover on its own.
+                # SSRF_LIVE is special-cased: it's not a checks.py payload
+                # check (it needs the collaborator above, not just a rule),
+                # so it can't go through run_payload_checks like the others.
                 bridge_rules = load_dynamic_queries() if bridge_targets else {}
                 for target in (bridge_targets or []):
-                    rule = bridge_rules.get(target.dynamic_rule_id)
-                    if rule is None:
-                        continue
-                    try:
-                        bridge_results = await asyncio.wait_for(
-                            run_payload_checks(
-                                pair.primary, target.url, {target.dynamic_rule_id: rule},
-                                active_mode=dynamic_active_mode,
-                            ),
-                            timeout=15.0,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            f"[scan:{scan_id}] Bridge check {target.dynamic_rule_id} "
-                            f"failed for {target.url}: {exc}"
-                        )
-                        continue
+                    if target.dynamic_rule_id == "SSRF_LIVE":
+                        if collaborator is None:
+                            continue
+                        param_name = next(iter(parse_qs(urlsplit(target.url).query)), None)
+                        try:
+                            bridge_results = [await asyncio.wait_for(
+                                run_ssrf_probe(
+                                    pair.primary, target.url, collaborator,
+                                    control_id=(target.asvs_controls[0] if target.asvs_controls else "V5.3.2"),
+                                    active_mode=dynamic_active_mode,
+                                    candidate_params=[param_name] if param_name else None,
+                                ),
+                                timeout=15.0,
+                            )]
+                        except Exception as exc:
+                            logger.warning(
+                                f"[scan:{scan_id}] Bridge SSRF check failed for {target.url}: {exc}"
+                            )
+                            continue
+                    else:
+                        rule = bridge_rules.get(target.dynamic_rule_id)
+                        if rule is None:
+                            continue
+                        try:
+                            bridge_results = await asyncio.wait_for(
+                                run_payload_checks(
+                                    pair.primary, target.url, {target.dynamic_rule_id: rule},
+                                    active_mode=dynamic_active_mode,
+                                ),
+                                timeout=15.0,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                f"[scan:{scan_id}] Bridge check {target.dynamic_rule_id} "
+                                f"failed for {target.url}: {exc}"
+                            )
+                            continue
                     for finding in bridge_results:
                         finding.evidence = (
                             f"bridge:{target.static_finding_id}:{target.source_file}:{target.source_line}"
                         )
                     findings.extend(bridge_results)
 
-                # REQUEST_SMUGGLING/CSRF_TOKEN_NOT_VALIDATED are the only fixed
-                # rule_ids among the checks above with real side effects when
-                # they actually ran (everything else in run_payload_checks —
-                # redirect/CRLF/double-decode/unauthenticated-access — is
-                # read-only) — audit those specifically, wherever they came
-                # from (check_urls or a bridge target).
+                # REQUEST_SMUGGLING/CSRF_TOKEN_NOT_VALIDATED/SSRF_LIVE are the
+                # only fixed rule_ids among the checks above with real side
+                # effects when they actually ran (everything else in
+                # run_payload_checks — redirect/CRLF/double-decode/
+                # unauthenticated-access — is read-only) — audit those
+                # specifically, wherever they came from (check_urls or a
+                # bridge target). The *general* SSRF loop further down
+                # audits its own findings directly instead of relying on
+                # this block, since it runs later.
                 for finding in findings:
-                    if finding.rule_id in ("REQUEST_SMUGGLING", "CSRF_TOKEN_NOT_VALIDATED"):
+                    if finding.rule_id in ("REQUEST_SMUGGLING", "CSRF_TOKEN_NOT_VALIDATED", "SSRF_LIVE"):
                         _audit(finding)
 
                 # Stored-XSS probe (Phase 4): submits each crawler-discovered
@@ -813,34 +858,25 @@ class ScanService:
                             f"{form.action_url}: {exc}"
                         )
 
-                # SSRF probe (Track A2): out-of-band confirmation via a real
-                # HTTP collaborator (see collaborator.py's module docstring
-                # for why this needs an out-of-band signal at all). Only
-                # started when dynamic_active_mode is set — the check itself
-                # is a no-op without it (run_ssrf_probe always returns
-                # SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION otherwise), so
-                # spinning up a listener thread/socket for nothing is
-                # avoided. Bounded to the first MAX_SSRF_URLS_TO_PROBE
-                # crawled URLs, same budget reasoning as the loops above.
-                if dynamic_active_mode:
-                    collaborator_kwargs: Dict[str, Any] = {}
-                    if dynamic_ssrf_collaborator_host:
-                        collaborator_kwargs["host"] = dynamic_ssrf_collaborator_host
-                    if dynamic_ssrf_collaborator_port:
-                        collaborator_kwargs["port"] = dynamic_ssrf_collaborator_port
-                    with CollaboratorServer(**collaborator_kwargs) as collaborator:
-                        for url in check_urls[:MAX_SSRF_URLS_TO_PROBE]:
-                            try:
-                                ssrf_finding = await asyncio.wait_for(
-                                    run_ssrf_probe(
-                                        pair.primary, url, collaborator, active_mode=dynamic_active_mode,
-                                    ),
-                                    timeout=15.0,
-                                )
-                                findings.append(ssrf_finding)
-                                _audit(ssrf_finding)
-                            except Exception as exc:
-                                logger.warning(f"[scan:{scan_id}] SSRF probe failed for {url}: {exc}")
+                # SSRF probe (Track A2): out-of-band confirmation via the
+                # collaborator created up front (see collaborator.py's module
+                # docstring for why this needs an out-of-band signal at all).
+                # Bounded to the first MAX_SSRF_URLS_TO_PROBE crawled URLs,
+                # same budget reasoning as the loops above.
+                if collaborator is not None:
+                    for url in check_urls[:MAX_SSRF_URLS_TO_PROBE]:
+                        try:
+                            ssrf_finding = await asyncio.wait_for(
+                                run_ssrf_probe(
+                                    pair.primary, url, collaborator, active_mode=dynamic_active_mode,
+                                ),
+                                timeout=15.0,
+                            )
+                            findings.append(ssrf_finding)
+                            _audit(ssrf_finding)
+                        except Exception as exc:
+                            logger.warning(f"[scan:{scan_id}] SSRF probe failed for {url}: {exc}")
+                    collaborator.stop()
 
                 if auth_mode != AuthMode.NONE:
                     logout_url = await discover_logout_url(pair.primary, target_url)
