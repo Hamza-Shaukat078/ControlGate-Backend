@@ -14,6 +14,7 @@ that aren't backing a specific live-integration assertion.
 from __future__ import annotations
 
 import html
+import json
 import threading
 import time
 import urllib.request
@@ -99,6 +100,36 @@ class VulnHandler(BaseHTTPRequestHandler):
                 b"</body></html>"
             )
             self._send(200, body)
+            return
+
+        if path == "/openapi.json":
+            # Track C3 fixture: describes this server's own /search and
+            # /products routes (both already vulnerable — REFLECTED_XSS_LIVE
+            # and SQL_INJECTION_LIVE respectively) so the live discovery test
+            # can prove parse_openapi_spec()'s output URLs are exactly the
+            # kind of URL those existing live checks already know how to
+            # flag FAIL — i.e. the integration point is right, not that a
+            # new check exists.
+            body = json.dumps({
+                "openapi": "3.0.0",
+                "paths": {
+                    "/search": {
+                        "get": {
+                            "parameters": [
+                                {"name": "q", "in": "query", "schema": {"type": "string", "example": "test"}},
+                            ],
+                        },
+                    },
+                    "/products": {
+                        "get": {
+                            "parameters": [
+                                {"name": "id", "in": "query", "schema": {"type": "string", "example": "1"}},
+                            ],
+                        },
+                    },
+                },
+            }).encode()
+            self._send(200, body, content_type="application/json")
             return
 
         if path in ("/page1", "/page2"):
@@ -290,6 +321,59 @@ class VulnHandler(BaseHTTPRequestHandler):
         if path == "/fetch-safe":
             # Safe: never fetches a caller-supplied URL at all.
             self._send(200, b"fetching arbitrary URLs is not supported")
+            return
+
+        if path == "/spa":
+            # Track C2 fixture: a JS-rendered "SPA" shell — the raw body has
+            # no <a href> at all (crawler.py's regex crawler would see
+            # nothing here), and the client-side script both (a) writes a
+            # same-origin link into the DOM after load (only a headless
+            # browser crawl discovers /spa-next) and (b) reads
+            # location.hash and writes it into the page via innerHTML with
+            # no escaping at all — vulnerable to DOM-based XSS on purpose.
+            #
+            # decodeURIComponent() here isn't a workaround for anything —
+            # it's what makes this realistic: a browser's URL parser always
+            # percent-encodes '<', '>', '"' etc. in a fragment (WHATWG URL
+            # Standard's fragment percent-encode set), so location.hash
+            # itself is never raw HTML. Real hash-routing SPAs decode it
+            # for entirely unrelated reasons (the hash commonly carries
+            # encoded route params) and this is exactly the extremely
+            # common real-world shape that turns into DOM XSS: decode,
+            # then hand the decoded string straight to innerHTML.
+            body = (
+                b"<html><body>"
+                b"<div id='app'>loading...</div>"
+                b"<script>"
+                b"document.getElementById('app').innerHTML = "
+                b"'<a href=\"/spa-next\">next</a><div id=\"hash-sink\">' "
+                b"+ decodeURIComponent(location.hash.slice(1)) + '</div>';"
+                b"</script>"
+                b"</body></html>"
+            )
+            self._send(200, body)
+            return
+
+        if path == "/spa-next":
+            self._send(200, b"<html><body>spa-next page</body></html>")
+            return
+
+        if path == "/spa-safe":
+            # Safe: the (decoded) fragment is written via textContent,
+            # never innerHTML — any HTML it contains is rendered as inert
+            # text, not parsed/executed.
+            body = (
+                b"<html><body>"
+                b"<div id='app'>loading...</div>"
+                b"<script>"
+                b"var d = document.createElement('div');"
+                b"d.id = 'hash-sink';"
+                b"d.textContent = decodeURIComponent(location.hash.slice(1));"
+                b"document.getElementById('app').appendChild(d);"
+                b"</script>"
+                b"</body></html>"
+            )
+            self._send(200, body)
             return
 
         if path == "/protected-data":

@@ -21,7 +21,10 @@ from app.domain.analysis.dast.checks import run_payload_checks
 from app.domain.analysis.dast.collaborator import CollaboratorServer
 from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig, FormLoginConfig
 from app.domain.analysis.dast.crawler import DiscoveredForm, crawl
+from app.domain.analysis.dast.browser_crawler import crawl_with_browser
+from app.domain.analysis.dast.dom_xss_probe import run_dom_xss_probe
 from app.domain.analysis.dast.idor_probe import IdorProbeConfig, run_idor_probe
+from app.domain.analysis.dast.openapi_discovery import fetch_openapi_spec, parse_openapi_spec
 from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
 from app.domain.analysis.dast.rule_loader import load_dynamic_queries
 from app.domain.analysis.dast.session import DastSession, DastSessionPair
@@ -36,6 +39,32 @@ from tests.fixtures.dast_vuln_server import (
 )
 
 RULES = load_dynamic_queries(Path(__file__).resolve().parents[2] / "queries" / "dynamic_queries.json")
+
+
+def _chromium_available() -> bool:
+    """pytest.importorskip("playwright") alone only proves the *package* is
+    installed — a pip install without the separate `playwright install
+    chromium` step leaves the package importable but every real launch
+    failing. This actually launches (and immediately closes) a browser, via
+    the sync API since this runs at collection time, outside any
+    pytest-asyncio event loop, same rationale as C5's _docker_available()
+    doing a real `docker info` rather than just checking PATH."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return False
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            browser.close()
+        return True
+    except Exception:
+        return False
+
+
+requires_chromium = pytest.mark.skipif(
+    not _chromium_available(), reason="Playwright/Chromium not available in this environment",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -375,3 +404,101 @@ class TestSessionRefreshLive:
         assert r1.status_code == 200
         assert r2.status_code == 200
         assert r3.status_code == 200
+
+
+@requires_chromium
+class TestBrowserCrawlerLive:
+    # /spa's raw HTTP body has no <a href> at all — crawler.crawl() (the
+    # regex crawler) would see nothing here. Only a real headless browser,
+    # letting /spa's own inline <script> run and write the link into the
+    # DOM, discovers /spa-next at all.
+    async def test_discovers_js_rendered_link_and_form(self, base_url):
+        result = await crawl_with_browser(base_url + "/spa", max_pages=5, max_depth=1)
+
+        assert base_url + "/spa" in result.urls
+        assert base_url + "/spa-next" in result.urls
+
+
+@requires_chromium
+class TestDomXssProbeLive:
+    # Real headless Chromium, real JS execution — proves the FAIL/PASS
+    # split isn't a mocked assumption: /spa's decodeURIComponent(location.hash)
+    # -> innerHTML really does execute the marker payload, and /spa-safe's
+    # textContent-based sink really doesn't.
+    async def test_vulnerable_spa_hash_sink_flagged_fail(self, base_url):
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                context = await browser.new_context()
+                finding = await run_dom_xss_probe(context, base_url + "/spa", active_mode=True)
+            finally:
+                await browser.close()
+
+        assert finding.verdict == Verdict.FAIL
+
+    async def test_safe_spa_text_content_sink_passes(self, base_url):
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                context = await browser.new_context()
+                finding = await run_dom_xss_probe(context, base_url + "/spa-safe", active_mode=True)
+            finally:
+                await browser.close()
+
+        assert finding.verdict == Verdict.PASS
+
+    async def test_skipped_without_active_mode(self, base_url):
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                context = await browser.new_context()
+                finding = await run_dom_xss_probe(context, base_url + "/spa", active_mode=False)
+            finally:
+                await browser.close()
+
+        assert finding.verdict == Verdict.SKIPPED_REQUIRES_ACTIVE_AUTHORIZATION
+
+
+class TestOpenApiDiscoveryLive:
+    # Proves the integration point, not a new check: discovery produces real
+    # URLs (fetched + parsed against an actual socket, not a mock), and
+    # those URLs get correctly flagged FAIL by the *existing*
+    # REFLECTED_XSS_LIVE / SQL_INJECTION_LIVE checks — exactly the same as
+    # if the crawler itself had found /search and /products.
+    async def test_fetch_and_parse_real_spec(self, base_url):
+        async with await _session() as session:
+            spec = await fetch_openapi_spec(session, base_url + "/openapi.json")
+            endpoints = parse_openapi_spec(spec, base_url)
+
+        urls = {e.url for e in endpoints}
+        assert f"{base_url}/search?q=test" in urls
+        assert f"{base_url}/products?id=1" in urls
+
+    async def test_discovered_urls_are_flagged_by_existing_live_checks(self, base_url):
+        async with await _session() as session:
+            spec = await fetch_openapi_spec(session, base_url + "/openapi.json")
+            endpoints = parse_openapi_spec(spec, base_url)
+
+            # active_mode=True: SQL_INJECTION_LIVE (unlike REFLECTED_XSS_LIVE)
+            # is requires_active_mode in dynamic_queries.json, since its
+            # boolean-blind probe reaches a real query rather than just
+            # reading a response back.
+            findings_by_url = {}
+            for endpoint in endpoints:
+                findings_by_url[endpoint.url] = await run_payload_checks(
+                    session, endpoint.url, RULES, active_mode=True,
+                )
+
+        search_findings = findings_by_url[f"{base_url}/search?q=test"]
+        by_rule = {f.rule_id: f for f in search_findings}
+        assert by_rule["REFLECTED_XSS_LIVE"].verdict == Verdict.FAIL
+
+        products_findings = findings_by_url[f"{base_url}/products?id=1"]
+        by_rule = {f.rule_id: f for f in products_findings}
+        assert by_rule["SQL_INJECTION_LIVE"].verdict == Verdict.FAIL

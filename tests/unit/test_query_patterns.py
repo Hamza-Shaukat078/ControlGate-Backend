@@ -1833,3 +1833,151 @@ class TestCommandInjectionRegexNoBacktrackBlowup:
         re.search(pattern, payload)
         elapsed = time.monotonic() - start
         assert elapsed < 0.5, f"regex took {elapsed:.2f}s on adversarial payload — ReDoS regression"
+
+
+# ── Track D3 — V8.2.1: destructive route without ownership guard ──────────────
+
+class TestUnprotectedDestructiveRoutePatterns:
+    """A DELETE/PUT sibling of BROKEN_ACCESS_CONTROL/ADMIN_ROUTE_UNPROTECTED —
+    catches a resource-id-in-the-URL-path route (Flask <id>/FastAPI {id}/
+    Express :id) with no ownership/permission guard, a shape neither existing
+    rule catches: BROKEN_ACCESS_CONTROL only looks for request.args/req.query
+    reads, and ADMIN_ROUTE_UNPROTECTED only looks for '/admin' in the path."""
+
+    RULE = "UNPROTECTED_DESTRUCTIVE_ROUTE"
+
+    def test_flask_delete_route_without_guard_detected(self):
+        code = (
+            "@app.route('/orders/<int:order_id>', methods=['DELETE'])\n"
+            "def delete_order(order_id):\n"
+            "    db.orders.delete(order_id)\n"
+            "    return '', 204\n"
+        )
+        assert matches_any(get_patterns(self.RULE), code)
+
+    def test_flask_delete_route_with_ownership_guard_not_detected(self):
+        code = (
+            "@app.route('/orders/<int:order_id>', methods=['DELETE'])\n"
+            "@login_required\n"
+            "def delete_order(order_id):\n"
+            "    if not check_ownership(current_user, order_id):\n"
+            "        abort(403)\n"
+            "    db.orders.delete(order_id)\n"
+            "    return '', 204\n"
+        )
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_fastapi_delete_route_without_guard_detected(self):
+        code = (
+            "@app.delete(\"/items/{item_id}\")\n"
+            "def delete_item(item_id: int):\n"
+            "    db.remove(item_id)\n"
+        )
+        assert matches_any(get_patterns(self.RULE), code)
+
+    def test_fastapi_delete_route_with_depends_guard_not_detected(self):
+        code = (
+            "@app.delete(\"/items/{item_id}\")\n"
+            "def delete_item(item_id: int, user=Depends(get_current_user)):\n"
+            "    authorize(user, item_id)\n"
+            "    db.remove(item_id)\n"
+        )
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_express_delete_route_without_guard_detected(self):
+        code = (
+            "router.delete('/api/orders/:id', (req, res) => {\n"
+            "    db.orders.remove(req.params.id);\n"
+            "    res.sendStatus(204);\n"
+            "});\n"
+        )
+        assert matches_any(get_patterns(self.RULE), code)
+
+    def test_express_delete_route_with_ownership_guard_not_detected(self):
+        code = (
+            "router.delete('/api/orders/:id', requireAuth, (req, res) => {\n"
+            "    if (!checkOwnership(req.user, req.params.id)) return res.sendStatus(403);\n"
+            "    db.orders.remove(req.params.id);\n"
+            "    res.sendStatus(204);\n"
+            "});\n"
+        )
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_get_route_on_the_same_path_is_not_flagged(self):
+        # Only DELETE/PUT are destructive here — a plain read endpoint on the
+        # same resource shape is out of scope for this rule (BROKEN_ACCESS_CONTROL
+        # already covers unguarded reads via the request.args/id shape).
+        code = "@app.route('/orders/<int:order_id>', methods=['GET'])\ndef get_order(order_id):\n    return db.orders.get(order_id)\n"
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_adversarial_input_completes_fast(self):
+        import time
+
+        code = "no_match_line_of_code_here_at_all(a, b, c);\n" * 5000
+        for pattern in get_patterns(self.RULE):
+            start = time.perf_counter()
+            re.search(pattern, code)
+            elapsed = time.perf_counter() - start
+            assert elapsed < 1.0, f"{self.RULE} pattern took {elapsed:.2f}s — ReDoS regression: {pattern!r}"
+
+
+# ── Track D3 — V2.3.2: business-logic value used without a bounds check ───────
+
+class TestUnvalidatedBusinessLogicValuePatterns:
+    """Low-confidence by design (see queries.json description): variable
+    naming is the only signal a value feeds a calculation, and 'no validation
+    keyword nearby' is not proof none exists elsewhere in the function."""
+
+    RULE = "UNVALIDATED_BUSINESS_LOGIC_VALUE"
+
+    def test_python_price_and_quantity_used_unchecked_detected(self):
+        code = (
+            "quantity = request.json.get('quantity')\n"
+            "price = request.json.get('price')\n"
+            "total = price * quantity\n"
+        )
+        assert matches_any(get_patterns(self.RULE), code)
+
+    def test_python_price_and_quantity_bounds_checked_not_detected(self):
+        code = (
+            "quantity = request.json.get('quantity')\n"
+            "if quantity <= 0 or quantity > MAX_QUANTITY:\n"
+            "    raise ValueError('invalid quantity')\n"
+            "price = request.json.get('price')\n"
+            "if price <= 0:\n"
+            "    raise ValueError('invalid price')\n"
+            "total = price * quantity\n"
+        )
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_js_price_and_quantity_used_unchecked_detected(self):
+        code = (
+            "const quantity = req.body.quantity;\n"
+            "const price = req.body.price;\n"
+            "const total = price * quantity;\n"
+        )
+        assert matches_any(get_patterns(self.RULE), code)
+
+    def test_js_price_and_quantity_bounds_checked_not_detected(self):
+        code = (
+            "const quantity = req.body.quantity;\n"
+            "if (quantity <= 0 || quantity > MAX_QUANTITY) { throw new Error('invalid quantity'); }\n"
+            "const price = req.body.price;\n"
+            "if (price <= 0) { throw new Error('invalid price'); }\n"
+            "const total = price * quantity;\n"
+        )
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_unrelated_variable_name_not_detected(self):
+        code = "username = request.json.get('username')\ngreeting = 'hi ' + username\n"
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_adversarial_input_completes_fast(self):
+        import time
+
+        code = "no_match_line_of_code_here_at_all(a, b, c);\n" * 5000
+        for pattern in get_patterns(self.RULE):
+            start = time.perf_counter()
+            re.search(pattern, code)
+            elapsed = time.perf_counter() - start
+            assert elapsed < 1.0, f"{self.RULE} pattern took {elapsed:.2f}s — ReDoS regression: {pattern!r}"

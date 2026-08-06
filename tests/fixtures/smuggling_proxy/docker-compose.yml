@@ -1,0 +1,33 @@
+# Track C5 — two-hop stack for a genuine front-end/back-end smuggling
+# desync, which a single naive server (tests/fixtures/dast_vuln_server.py)
+# structurally cannot reproduce. One shared backend, two independently
+# configured nginx front ends (vulnerable vs. safe) on two host ports, so
+# tests/integration/test_dast_smuggling_proxy_chain.py can run the exact
+# same probe against both and expect opposite verdicts.
+services:
+  backend:
+    image: python:3.12-slim
+    volumes:
+      - ./backend.py:/app/backend.py:ro
+    working_dir: /app
+    command: ["python", "backend.py", "8000"]
+    expose:
+      - "8000"
+
+  nginx-vulnerable:
+    image: nginx:1.18-alpine
+    depends_on:
+      - backend
+    volumes:
+      - ./nginx-vulnerable.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "18091:80"
+
+  nginx-safe:
+    image: nginx:1.18-alpine
+    depends_on:
+      - backend
+    volumes:
+      - ./nginx-safe.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "18092:80"

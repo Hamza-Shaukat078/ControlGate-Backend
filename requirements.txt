@@ -27,3 +27,5 @@ tree-sitter-languages>=1.10.2  # Pre-built language grammars for tree-sitter (le
 tree-sitter-python>=0.23  # Grammar package for tree-sitter>=0.22 (tree-sitter-languages is unmaintained and ABI-incompatible with newer tree-sitter)
 tree-sitter-javascript>=0.23
 tree-sitter-typescript>=0.23
+playwright>=1.40  # Track C2 — headless-browser crawling + DOM-XSS probe. Needs the Chromium
+                   # binary too: run `playwright install chromium` after pip install (see README).

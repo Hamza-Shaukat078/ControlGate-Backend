@@ -192,6 +192,9 @@ async def start_scan(
             dynamic_rule_ids=payload.dynamic_rule_ids,
             dynamic_ssrf_collaborator_host=payload.dynamic_ssrf_collaborator_host,
             dynamic_ssrf_collaborator_port=payload.dynamic_ssrf_collaborator_port,
+            dynamic_openapi_spec_url=payload.dynamic_openapi_spec_url,
+            dynamic_openapi_spec=payload.dynamic_openapi_spec,
+            dynamic_use_headless_browser=payload.dynamic_use_headless_browser,
         )
         
         return ScanResponse(

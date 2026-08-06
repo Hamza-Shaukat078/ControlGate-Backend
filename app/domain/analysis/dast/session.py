@@ -118,6 +118,34 @@ class DastSession:
         ) as anon_client:
             return await anon_client.request(method, url, **kwargs)
 
+    def browser_auth_state(self) -> tuple[list[dict], dict[str, str]]:
+        """Track C2 — exports this session's *already-established* auth
+        state (cookies from a completed form_login, or the bearer header)
+        in the shapes Playwright's BrowserContext wants
+        (context.add_cookies()/context.set_extra_http_headers()). The
+        browser crawler never performs its own login — this is the one
+        place that translation happens, keeping actual login logic
+        confined to _authenticate() above.
+
+        httpx.Cookies wraps a stdlib http.cookiejar.CookieJar; iterating
+        its .jar gives real Cookie objects with the domain/path Playwright
+        needs (unlike Cookies.__iter__, which only yields name/value)."""
+        cookies = [
+            {
+                "name": c.name,
+                "value": c.value,
+                "domain": c.domain,
+                "path": c.path or "/",
+            }
+            for c in self._client.cookies.jar
+            if c.domain  # Playwright's add_cookies() requires a non-empty domain (or a url instead)
+        ]
+        headers = {}
+        auth_header = self._client.headers.get("Authorization")
+        if auth_header:
+            headers["Authorization"] = auth_header
+        return cookies, headers
+
     def redact(self, text: str) -> str:
         """Strip every known secret value (tokens, passwords, live session
         cookies) out of a string before it's logged or stored as evidence."""

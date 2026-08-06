@@ -227,6 +227,48 @@ class TestSessionRefresh:
         assert len(login_calls) == 2  # initial __aenter__ login + exactly one re-auth, no loop
 
 
+class TestBrowserAuthState:
+    """Track C2 — DastSession.browser_auth_state() exports whatever this
+    session already authenticated with, in the shapes Playwright's
+    BrowserContext wants — never a second login."""
+
+    @pytest.mark.asyncio
+    async def test_bearer_token_exported_as_authorization_header(self):
+        actor = ActorConfig(auth_mode=AuthMode.BEARER, bearer_token="secret-token-xyz")
+        async with DastSession(actor, resolve=False, transport=_echo_transport([], [])) as session:
+            cookies, headers = session.browser_auth_state()
+
+        assert cookies == []
+        assert headers == {"Authorization": "Bearer secret-token-xyz"}
+
+    @pytest.mark.asyncio
+    async def test_form_login_cookie_exported_with_domain_and_path(self):
+        form = FormLoginConfig(
+            login_url="https://target.example/login",
+            username_field="user", password_field="pass",
+            username="alice", password="hunter2",
+        )
+        actor = ActorConfig(auth_mode=AuthMode.FORM_LOGIN, form_login=form)
+        async with DastSession(actor, resolve=False, transport=_echo_transport([], [])) as session:
+            cookies, headers = session.browser_auth_state()
+
+        assert headers == {}
+        assert len(cookies) == 1
+        assert cookies[0]["name"] == "session"
+        assert cookies[0]["value"] == "abc123"
+        assert cookies[0]["domain"]
+        assert cookies[0]["path"] == "/"
+
+    @pytest.mark.asyncio
+    async def test_no_auth_mode_exports_nothing(self):
+        actor = ActorConfig(auth_mode=AuthMode.NONE)
+        async with DastSession(actor, resolve=False, transport=_echo_transport([], [])) as session:
+            cookies, headers = session.browser_auth_state()
+
+        assert cookies == []
+        assert headers == {}
+
+
 class TestSessionPair:
     @pytest.mark.asyncio
     async def test_second_actor_holds_independent_session(self):

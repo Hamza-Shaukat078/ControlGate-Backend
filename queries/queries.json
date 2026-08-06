@@ -6668,5 +6668,62 @@
       "V17.2.8"
     ],
     "finding_polarity": "compliant"
+  },
+  "UNPROTECTED_DESTRUCTIVE_ROUTE": {
+    "rule_id": "UNPROTECTED_DESTRUCTIVE_ROUTE",
+    "name": "Destructive Route (DELETE/PUT) Without Ownership Guard",
+    "owasp": "A01",
+    "cwe": "CWE-862",
+    "description": "A DELETE/PUT route that takes a resource-id path parameter (e.g. /orders/<id>, /api/users/:id) and has no ownership/permission guard nearby \u2014 the classic BROKEN_ACCESS_CONTROL/ADMIN_ROUTE_UNPROTECTED shape, but for routes whose id comes from the URL path itself rather than request.args/req.query, and whose method is destructive (DELETE/PUT) rather than merely /admin-prefixed.",
+    "severity": "high",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "required_guards": [
+      "g.user_id",
+      "session.user_id",
+      "check_ownership",
+      "authorize",
+      "require_admin"
+    ],
+    "regex_patterns": [
+      "(?i)@(?:app|blueprint|bp)\\.route\\(\\s*['\\\"][^'\\\"]*(?:<[^>]+>|\\{[^}]+\\})[^'\\\"]*['\\\"]\\s*,\\s*methods\\s*=\\s*\\[[^\\]]*['\\\"](?:DELETE|PUT)['\\\"][^\\]]*\\][^)]*\\)(?![\\s\\S]{0,400}(?:g\\.user_id|session\\.user_id|check_ownership|authorize|require_admin|login_required|current_user\\.id))",
+      "(?i)@(?:app|router)\\.(?:delete|put)\\(\\s*['\\\"][^'\\\"]*(?:\\{[^}]+\\}|<[^>]+>)[^'\\\"]*['\\\"]\\s*[,)](?![\\s\\S]{0,400}(?:g\\.user_id|session\\.user_id|check_ownership|authorize|require_admin|login_required|current_user\\.id|Depends\\s*\\())",
+      "(?i)(?:router|app)\\.(?:delete|put)\\(\\s*['\\\"][^'\\\"]*:[a-zA-Z_][a-zA-Z0-9_]*[^'\\\"]*['\\\"]\\s*,(?![\\s\\S]{0,400}(?:req\\.user|checkOwnership|authorize|requireAdmin|isOwner|isAuthenticated|requireAuth))"
+    ],
+    "confidence": "medium",
+    "asvs_controls": [
+      "V8.2.1"
+    ]
+  },
+  "UNVALIDATED_BUSINESS_LOGIC_VALUE": {
+    "rule_id": "UNVALIDATED_BUSINESS_LOGIC_VALUE",
+    "name": "Client-Supplied Price/Quantity Used Without Server-Side Bounds Check",
+    "owasp": "A04",
+    "cwe": "CWE-841",
+    "description": "A price/quantity/amount-shaped value is read directly from the request body/query and used with no nearby bounds/re-validation step (an 'if', min/max/abs clamp, or explicit validate/assert/raise) \u2014 input not validated against business/functional expectations (V2.2.1), not a data-type/injection problem. Inherently weaker than the catalog's other rules: variable naming is the only signal the value feeds a calculation, and 'no keyword within N characters' is not proof no validation exists elsewhere in the function \u2014 low confidence by design, expect real false positives.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?i)\\b(?:price|amount|quantity|qty|unit_price|total_price)\\s*=\\s*request\\.(?:json|form|args)\\.get\\([^)]*\\)(?![\\s\\S]{0,200}(?:if\\s|validate|min\\(|max\\(|abs\\(|Decimal|assert\\s|raise\\s))",
+      "(?i)\\b(?:const|let|var)\\s+(?:price|amount|quantity|qty|unitPrice|totalPrice)\\s*=\\s*req\\.(?:body|query|params)\\.[a-zA-Z_]+;?(?![\\s\\S]{0,200}(?:if\\s*\\(|validate|Math\\.min|Math\\.max|Math\\.abs|throw\\s))"
+    ],
+    "asvs_controls": [
+      "V2.2.1"
+    ]
   }
 }

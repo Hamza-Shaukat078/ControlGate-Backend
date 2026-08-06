@@ -65,6 +65,9 @@ class ScanService:
         dynamic_rule_ids: Optional[list[str]] = None,
         dynamic_ssrf_collaborator_host: Optional[str] = None,
         dynamic_ssrf_collaborator_port: Optional[int] = None,
+        dynamic_openapi_spec_url: Optional[str] = None,
+        dynamic_openapi_spec: Optional[str] = None,
+        dynamic_use_headless_browser: bool = False,
     ) -> tuple[str, str]:
         trace_step("Service: ScanService.start() (app/services/scan_service.py)")
         scan_id = f"scan-{uuid.uuid4().hex[:12]}"
@@ -112,6 +115,7 @@ class ScanService:
                 dynamic_second_actor_form_login, dynamic_scenarios, dynamic_race_probes,
                 dynamic_idor_probes, dynamic_crawl_max_pages, dynamic_crawl_max_depth, dynamic_rule_ids,
                 dynamic_ssrf_collaborator_host, dynamic_ssrf_collaborator_port,
+                dynamic_openapi_spec_url, dynamic_openapi_spec, dynamic_use_headless_browser,
             ))
         elif code:
             trace_step("Dispatch: create_task(_run_direct_code_scan)")
@@ -147,6 +151,9 @@ class ScanService:
                     dynamic_rule_ids,
                     dynamic_ssrf_collaborator_host,
                     dynamic_ssrf_collaborator_port,
+                    dynamic_openapi_spec_url,
+                    dynamic_openapi_spec,
+                    dynamic_use_headless_browser,
                 )
             )
 
@@ -634,6 +641,9 @@ class ScanService:
         dynamic_ssrf_collaborator_host: Optional[str] = None,
         dynamic_ssrf_collaborator_port: Optional[int] = None,
         bridge_targets: Optional[list] = None,
+        dynamic_openapi_spec_url: Optional[str] = None,
+        dynamic_openapi_spec: Optional[str] = None,
+        dynamic_use_headless_browser: bool = False,
     ) -> tuple[list[dict], list[dict]]:
         from urllib.parse import parse_qs, urlsplit
 
@@ -648,6 +658,13 @@ class ScanService:
             build_logout_invalidates_session_scenario,
             discover_logout_url,
         )
+        from app.domain.analysis.dast.browser_crawler import crawl_with_browser
+        from app.domain.analysis.dast.dom_xss_probe import run_dom_xss_probe
+        from app.domain.analysis.dast.openapi_discovery import (
+            fetch_openapi_spec,
+            parse_openapi_spec,
+            parse_spec_text,
+        )
         from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
         from app.domain.analysis.dast.rule_loader import load_dynamic_queries
         from app.domain.analysis.dast.scenario_runner import run_scenario
@@ -659,6 +676,14 @@ class ScanService:
         MAX_ADDITIONAL_CRAWL_URLS = 5
         MAX_FORMS_TO_PROBE = 5
         MAX_SSRF_URLS_TO_PROBE = 5
+        # Same budget-capping precedent as MAX_ADDITIONAL_CRAWL_URLS — a spec
+        # can legitimately describe far more operations than is sane to fire
+        # a full payload-check sweep against in one scan.
+        MAX_OPENAPI_URLS = 15
+        # Same budget-capping precedent as MAX_SSRF_URLS_TO_PROBE — each one
+        # is a real headless-browser page navigation, materially slower than
+        # an httpx request.
+        MAX_DOM_XSS_URLS_TO_PROBE = 5
         # C1 — the crawler and run_payload_checks loops are already strictly
         # sequential (one request in flight at a time, no gather/concurrency
         # to bound with a semaphore) and are the actual volume driver here
@@ -746,6 +771,66 @@ class ScanService:
                 except Exception as exc:
                     logger.warning(f"[scan:{scan_id}] Crawler failed (non-blocking): {exc}")
 
+                # Track C3 — OpenAPI/spec-driven discovery. A second, optional
+                # source of URLs for check_urls, folded in alongside whatever
+                # the regex crawler found. Wrapped in try/except so a
+                # malformed/unreachable spec degrades the scan (crawler
+                # results still stand on their own), never aborts it — same
+                # philosophy every other optional discovery step here follows.
+                if dynamic_openapi_spec_url or dynamic_openapi_spec:
+                    try:
+                        spec = (
+                            parse_spec_text(dynamic_openapi_spec) if dynamic_openapi_spec
+                            else await fetch_openapi_spec(pair.primary, dynamic_openapi_spec_url)
+                        )
+                        endpoints = parse_openapi_spec(spec, target_url)
+                        openapi_urls = [e.url for e in endpoints if e.url not in check_urls]
+                        check_urls = check_urls + openapi_urls[:MAX_OPENAPI_URLS]
+                    except Exception as exc:
+                        logger.warning(f"[scan:{scan_id}] OpenAPI spec resolution failed (non-blocking): {exc}")
+
+                # Track C2 — headless-browser crawl. Merged into check_urls
+                # alongside the regex crawler's own output, not replacing
+                # it: a target with a mix of server-rendered and JS-rendered
+                # pages still benefits from both. browser_auth_state()
+                # exports whatever this session already authenticated with
+                # (never a second login) for the browser context to reuse.
+                # Mandatory graceful degradation: missing playwright
+                # package, missing Chromium binary, and a sandbox/permission
+                # failure in a constrained container are all real
+                # possibilities here and none of them may abort the scan —
+                # the regex crawler's results already stand on their own.
+                browser_cookies: list = []
+                browser_headers: Dict[str, str] = {}
+                if dynamic_use_headless_browser:
+                    browser_cookies, browser_headers = pair.primary.browser_auth_state()
+                    browser_crawl_kwargs: Dict[str, Any] = {}
+                    if dynamic_crawl_max_pages is not None:
+                        browser_crawl_kwargs["max_pages"] = dynamic_crawl_max_pages
+                    if dynamic_crawl_max_depth is not None:
+                        browser_crawl_kwargs["max_depth"] = dynamic_crawl_max_depth
+                    try:
+                        browser_result = await asyncio.wait_for(
+                            crawl_with_browser(
+                                target_url,
+                                cookies=browser_cookies or None,
+                                extra_headers=browser_headers or None,
+                                **browser_crawl_kwargs,
+                            ),
+                            timeout=45.0,
+                        )
+                        browser_urls = [u for u in browser_result.urls if u not in check_urls]
+                        check_urls = check_urls + browser_urls[:MAX_ADDITIONAL_CRAWL_URLS]
+                        new_forms = [f for f in browser_result.forms if f not in discovered_form_objects]
+                        discovered_form_objects.extend(new_forms)
+                        discovered_forms.extend(asdict(f) for f in new_forms)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"[scan:{scan_id}] Headless browser crawl timed out for {target_url}")
+                    except Exception as exc:
+                        logger.warning(
+                            f"[scan:{scan_id}] Headless browser crawl failed, continuing without it: {exc}"
+                        )
+
                 findings = await asyncio.wait_for(
                     run_payload_checks(
                         pair.primary, check_urls, rules=selected_rules, active_mode=dynamic_active_mode,
@@ -753,6 +838,41 @@ class ScanService:
                     ),
                     timeout=60.0,
                 )
+
+                # Track C2 — DOM-XSS probe. A real browser is launched once
+                # here (separate from crawl_with_browser's own, already-closed
+                # browser above — a fresh short-lived one is reused across
+                # every URL in this loop, not per-URL) since run_dom_xss_probe
+                # needs a live BrowserContext, not just a URL. Only runs when
+                # the browser feature is enabled; same graceful-degradation
+                # posture as the crawl above — a missing package/binary/
+                # sandbox failure here never aborts the scan.
+                if dynamic_use_headless_browser:
+                    try:
+                        from playwright.async_api import async_playwright
+                        async with async_playwright() as pw:
+                            dom_xss_browser = await pw.chromium.launch(headless=True)
+                            try:
+                                dom_xss_context = await dom_xss_browser.new_context()
+                                if browser_cookies:
+                                    await dom_xss_context.add_cookies(browser_cookies)
+                                if browser_headers:
+                                    await dom_xss_context.set_extra_http_headers(browser_headers)
+                                for dom_url in check_urls[:MAX_DOM_XSS_URLS_TO_PROBE]:
+                                    dom_finding = await asyncio.wait_for(
+                                        run_dom_xss_probe(
+                                            dom_xss_context, dom_url, active_mode=dynamic_active_mode,
+                                        ),
+                                        timeout=PER_ITEM_TIMEOUT,
+                                    )
+                                    findings.append(dom_finding)
+                                    _audit(dom_finding)
+                            finally:
+                                await dom_xss_browser.close()
+                    except Exception as exc:
+                        logger.warning(
+                            f"[scan:{scan_id}] Headless-browser DOM-XSS probe failed, continuing without it: {exc}"
+                        )
 
                 # SSRF's collaborator (Track A2) is created once up front —
                 # both the bridge loop below (an SSRF-mapped bridge target)
@@ -988,6 +1108,9 @@ class ScanService:
         dynamic_rule_ids: Optional[list[str]] = None,
         dynamic_ssrf_collaborator_host: Optional[str] = None,
         dynamic_ssrf_collaborator_port: Optional[int] = None,
+        dynamic_openapi_spec_url: Optional[str] = None,
+        dynamic_openapi_spec: Optional[str] = None,
+        dynamic_use_headless_browser: bool = False,
     ):
         trace_step("Worker: _run_dynamic_scan() (app/services/scan_service.py)")
         start_time = time.time()
@@ -1005,6 +1128,8 @@ class ScanService:
                 dynamic_second_actor_form_login, dynamic_scenarios, dynamic_race_probes,
                 dynamic_idor_probes, dynamic_crawl_max_pages, dynamic_crawl_max_depth, dynamic_rule_ids,
                 dynamic_ssrf_collaborator_host, dynamic_ssrf_collaborator_port,
+                dynamic_openapi_spec_url=dynamic_openapi_spec_url, dynamic_openapi_spec=dynamic_openapi_spec,
+                dynamic_use_headless_browser=dynamic_use_headless_browser,
             )
 
             by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0}
@@ -1084,6 +1209,9 @@ class ScanService:
         dynamic_rule_ids: Optional[list[str]] = None,
         dynamic_ssrf_collaborator_host: Optional[str] = None,
         dynamic_ssrf_collaborator_port: Optional[int] = None,
+        dynamic_openapi_spec_url: Optional[str] = None,
+        dynamic_openapi_spec: Optional[str] = None,
+        dynamic_use_headless_browser: bool = False,
     ):
         trace_step("Worker: _run_repository_scan() (app/services/scan_service.py)")
         start_time = time.time()
@@ -1268,6 +1396,9 @@ class ScanService:
                             dynamic_scenarios, dynamic_race_probes, dynamic_idor_probes,
                             dynamic_crawl_max_pages, dynamic_crawl_max_depth, dynamic_rule_ids,
                             dynamic_ssrf_collaborator_host, dynamic_ssrf_collaborator_port, bridge_targets,
+                            dynamic_openapi_spec_url=dynamic_openapi_spec_url,
+                            dynamic_openapi_spec=dynamic_openapi_spec,
+                            dynamic_use_headless_browser=dynamic_use_headless_browser,
                         ),
                         timeout=120.0,
                     )

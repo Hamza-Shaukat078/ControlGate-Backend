@@ -32,6 +32,7 @@ Quickstart (Windows PowerShell)
 python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -U pip
 pip install -r requirements.txt
+playwright install chromium  # Track C2 — headless-browser DAST crawling/DOM-XSS probe
 ```
 
 2) Configure environment

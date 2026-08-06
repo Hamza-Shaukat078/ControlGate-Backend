@@ -330,3 +330,46 @@ class TestSsrfCollaboratorConfig:
         s = ScanStart(code="print(1)", language="python")
         assert s.dynamic_ssrf_collaborator_host is None
         assert s.dynamic_ssrf_collaborator_port is None
+
+
+class TestOpenApiSpecSource:
+    """Track C3 — dynamic_openapi_spec_url/dynamic_openapi_spec are mutually
+    exclusive (ambiguous which one should win otherwise), same shape as the
+    field-level checks above but a model_validator since either one may be
+    entirely absent."""
+
+    def test_url_alone_is_valid(self):
+        s = ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_openapi_spec_url=f"{TARGET}/openapi.json")
+        assert s.dynamic_openapi_spec_url == f"{TARGET}/openapi.json"
+        assert s.dynamic_openapi_spec is None
+
+    def test_inline_text_alone_is_valid(self):
+        s = ScanStart(
+            scan_type="dynamic", target_url=TARGET,
+            dynamic_openapi_spec='{"paths": {"/health": {"get": {}}}}',
+        )
+        assert s.dynamic_openapi_spec == '{"paths": {"/health": {"get": {}}}}'
+        assert s.dynamic_openapi_spec_url is None
+
+    def test_both_supplied_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ScanStart(
+                scan_type="dynamic", target_url=TARGET,
+                dynamic_openapi_spec_url=f"{TARGET}/openapi.json",
+                dynamic_openapi_spec='{"paths": {}}',
+            )
+
+    def test_neither_supplied_defaults_to_none(self):
+        s = ScanStart(code="print(1)", language="python")
+        assert s.dynamic_openapi_spec_url is None
+        assert s.dynamic_openapi_spec is None
+
+
+class TestUseHeadlessBrowser:
+    def test_defaults_to_false(self):
+        s = ScanStart(code="print(1)", language="python")
+        assert s.dynamic_use_headless_browser is False
+
+    def test_can_be_enabled(self):
+        s = ScanStart(scan_type="dynamic", target_url=TARGET, dynamic_use_headless_browser=True)
+        assert s.dynamic_use_headless_browser is True

@@ -20,6 +20,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir -r requirements-cpg.txt
 
+# Track C2 — Chromium + its OS-level deps for the headless-browser crawler/
+# DOM-XSS probe. --with-deps pulls the (many) shared libraries Chromium
+# needs that a slim base image doesn't have; playwright itself is already
+# installed via requirements.txt above.
+RUN playwright install --with-deps chromium
+
 # Copy application code
 COPY . .
 

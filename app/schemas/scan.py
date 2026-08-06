@@ -282,6 +282,29 @@ class ScanStart(APIModel):
         None, ge=1, le=65535,
         description="Port for the SSRF collaborator listener. Defaults to an OS-assigned ephemeral port.",
     )
+    dynamic_openapi_spec_url: Optional[str] = Field(
+        None,
+        description="URL of an OpenAPI/Swagger spec (JSON or YAML) to fetch and expand into testable "
+                    "URLs (Track C3). Every discovered operation is folded into the same check_urls list "
+                    "the crawler populates — API-first targets with little/no server-rendered HTML for "
+                    "the crawler to follow become discoverable. Fetched through the same SSRF-guarded "
+                    "session as every other request. Mutually exclusive with 'dynamic_openapi_spec'.",
+    )
+    dynamic_openapi_spec: Optional[str] = Field(
+        None,
+        description="Raw OpenAPI/Swagger spec text (JSON or YAML), supplied inline instead of a URL — "
+                    "useful when the spec isn't served live by the target. Mutually exclusive with "
+                    "'dynamic_openapi_spec_url'.",
+    )
+    dynamic_use_headless_browser: bool = Field(
+        False,
+        description="Track C2 — additionally crawl with a real headless Chromium (via Playwright) and "
+                    "run a DOM-XSS probe (location.hash reflected unescaped into the DOM) against "
+                    "discovered URLs. Needed for JS-rendered (SPA) targets the regex crawler can't see "
+                    "into — its results are merged alongside the regex crawler's, never replacing them. "
+                    "Requires the Chromium binary to be installed (`playwright install chromium`); "
+                    "missing/broken browser support degrades this scan silently rather than failing it.",
+    )
 
     @field_validator('target_url')
     @classmethod
@@ -338,6 +361,15 @@ class ScanStart(APIModel):
             raise ValueError(
                 "'dynamic_second_actor_form_login' is required when "
                 "dynamic_second_actor_auth_mode is 'form_login'"
+            )
+        return self
+
+    @model_validator(mode='after')
+    def validate_openapi_spec_source(self):
+        if self.dynamic_openapi_spec_url and self.dynamic_openapi_spec:
+            raise ValueError(
+                "Provide either 'dynamic_openapi_spec_url' or 'dynamic_openapi_spec', not both — "
+                "ambiguous which one should win"
             )
         return self
 
