@@ -3,6 +3,16 @@ Capability Checker — answers "is X implemented (correctly)?" questions that
 config_inspector.py and the taint engine can't: ASVS controls whose evidence is
 the presence of a *correct* implementation, not a dangerous pattern.
 
+V6.2.2/.3/.4, V6.3.1, V6.4.1, V7.2.4, V7.4.1/.2, V14.3.1 are static_code
+controls — a finding here is the sole evidence source (see
+asvs_service.py's _merge_static). V6.6.1, V6.8.1, V7.6.2, V10.7.2,
+V11.2.2, and V15.4.4 stay manual_attestation in the catalog instead — a
+finding for any of them only ever fails the control
+(HYBRID_ATTESTATION_CAPABILITY_ELIGIBLE_CONTROLS /
+_merge_attestation_or_capability_finding in asvs_service.py); a clean read
+still requires a human, same reasoning as this module's docstring below
+about never fabricating a fail from absence.
+
 These controls are tagged `finding_polarity: "compliant"` in queries.json and
 today only match a tiny hand-picked keyword list — and even a real regex match
 never survives SliceClassifier's vulnerability gate (is_vulnerable=False for a
@@ -107,6 +117,70 @@ _CAPABILITY_CHECKS: dict[str, dict] = {
                     "logs out?",
         "keywords": ["localstorage.removeitem", "sessionstorage.removeitem",
                      "localstorage.clear", "sessionstorage.clear", "clear-site-data", "logout"],
+    },
+    "V6.6.1": {
+        "question": "If this code sends an SMS/telephony (voice call) one-time-passcode as an "
+                    "authentication factor, does it (a) validate the phone number belongs to the "
+                    "user — more than just a format/regex check, e.g. a prior verification step or "
+                    "a carrier lookup — before trusting it, AND (b) genuinely offer the user a "
+                    "non-SMS alternate authentication method (not merely a comment or a TODO)? "
+                    "Answer 'implemented' only if the code actually sends an SMS/voice OTP at all.",
+        "keywords": ["send_otp", "sms_otp", "sms_code", "twilio", "sns.publish", "send_sms",
+                     "phone_verification", "verify_phone", "otp_via_sms", "voice_otp"],
+    },
+    "V6.8.1": {
+        "question": "If this code supports login via multiple identity providers (SSO/OAuth/SAML), "
+                    "does it link an incoming IdP identity to an existing local account only after "
+                    "a proof-of-ownership step (e.g. the user is already logged in and explicitly "
+                    "confirms the link, or a verified-email challenge) — rather than automatically "
+                    "linking/merging accounts purely because the email address string matches "
+                    "across providers? Answer 'implemented' only if the code actually supports more "
+                    "than one identity provider.",
+        "keywords": ["identity_provider", "idp", "oauth_provider", "link_account", "linked_accounts",
+                     "find_or_create_user", "provider_id", "google_id", "github_id", "saml_provider"],
+    },
+    "V7.6.2": {
+        "question": "If this code implements federated/SSO login (OAuth/OIDC/SAML), does the "
+                    "callback/return handler route the user through a distinct consent-confirmation "
+                    "step (a page or prompt the user must actively accept) before a local session is "
+                    "created — rather than creating the session immediately and silently the moment "
+                    "the IdP redirect/assertion is received? Answer 'implemented' only if the code "
+                    "actually implements a federated/SSO login flow at all.",
+        "keywords": ["oauth_callback", "sso_callback", "saml_callback", "consent", "authorize_callback",
+                     "oidc_callback", "idp_redirect", "federated_login"],
+    },
+    "V10.7.2": {
+        "question": "If this code implements an OAuth/OIDC authorization endpoint that shows a "
+                    "consent screen, does that screen's template/view render the ACTUAL scopes or "
+                    "permissions being requested for this specific request (e.g. iterating over the "
+                    "requested scope list) — rather than a hardcoded generic message ('This app wants "
+                    "to access your account') that never varies with what's actually being requested? "
+                    "Answer 'implemented' only if the code actually renders a consent screen at all.",
+        "keywords": ["consent_screen", "consent_template", "requested_scopes", "scope_list",
+                     "authorize_view", "consent.html", "consent_prompt"],
+    },
+    "V11.2.2": {
+        "question": "Does this code route cryptographic algorithm/key-size choices (for hashing, "
+                    "symmetric encryption, or signing) through ONE centralized, config-driven "
+                    "abstraction or provider (e.g. a single crypto_config module, an algorithm-name "
+                    "read from settings/environment) — rather than hardcoding specific algorithm "
+                    "names/parameters (e.g. 'AES-256-GCM', 'RS256', a specific curve name) "
+                    "individually at each call site that performs cryptographic operations? Answer "
+                    "'implemented' only if the code actually performs cryptographic operations at all.",
+        "keywords": ["crypto_config", "cipher_suite", "algorithm=", "crypto_provider",
+                     "encryption_algorithm", "hash_algorithm", "signing_algorithm", "key_size"],
+    },
+    "V15.4.4": {
+        "question": "If this code creates a thread pool, worker pool, or process pool to handle "
+                    "concurrent requests/tasks (e.g. ThreadPoolExecutor, ProcessPoolExecutor, a "
+                    "custom worker-queue, a semaphore-capped task runner), is it EXPLICITLY bounded "
+                    "(a specific max_workers/max_concurrency/pool-size value or an equivalent "
+                    "semaphore limit) — rather than created unbounded (no size argument, or an "
+                    "explicitly unlimited/None setting) and left to grow with load? Answer "
+                    "'implemented' only if the code actually creates a thread/worker/process pool "
+                    "or an equivalent concurrency-limiting construct at all.",
+        "keywords": ["threadpoolexecutor", "processpoolexecutor", "max_workers", "worker_pool",
+                     "thread_pool", "semaphore", "boundedsemaphore", "concurrency_limit", "max_concurrency"],
     },
 }
 

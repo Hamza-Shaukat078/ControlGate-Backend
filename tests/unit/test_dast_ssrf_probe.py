@@ -21,7 +21,14 @@ TARGET = "https://target.example/fetch"
 
 @dataclass
 class _FakeHit:
+    # Regression — collaborator.CollaboratorHit gained a `received_at: float`
+    # field (see collaborator.py) that this stub never picked up, so
+    # run_ssrf_probe's real `hit.received_at` access (ssrf_probe.py) raised
+    # AttributeError against every test using a hit. Confirmed pre-existing
+    # test-fixture drift, not a production bug — real CollaboratorHit
+    # objects always carry this field.
     remote_addr: str = "10.0.0.5"
+    received_at: float = 1700000000.0
 
 
 class _FakeCollaborator:

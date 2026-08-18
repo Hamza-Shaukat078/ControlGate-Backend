@@ -14,7 +14,8 @@ from typing import Any, Optional
 
 @dataclass
 class Assertion:
-    type: str  # "status_in" | "status_not_in" | "body_contains" | "redirect_location_contains" | "any_of" | "all_of"
+    type: str  # "status_in" | "status_not_in" | "body_contains" | "body_not_contains" |
+               # "redirect_location_contains" | "any_of" | "all_of"
     expected: Any = None
     of: Optional[list["Assertion"]] = None
 
@@ -44,6 +45,14 @@ class Step:
     follow_redirects: bool = False
     extract: list = field(default_factory=list)  # list[Extractor]
     assertions: list = field(default_factory=list)  # list[Assertion]
+    # V10.4.3 (short-lived authorization codes, up to 10 min L1/L2 / 1 min
+    # L3) needs a real wall-clock wait between "obtain the code" and "attempt
+    # the exchange past its expiry" — no existing Step field can express
+    # that. Applied before this step's request is sent (see scenario_runner.
+    # run_scenario), so it belongs to the step that should be DELAYED, not
+    # the one before it. None/0 keeps every existing scenario's timing
+    # unchanged.
+    delay_seconds: Optional[float] = None
 
 
 @dataclass

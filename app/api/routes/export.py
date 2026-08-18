@@ -37,7 +37,9 @@ async def export_asvs_report(
         repo = result.scalar_one_or_none()
         repo_name = repo.name if repo else None
 
-    pdf_bytes = await service.export_pdf(scan_id, repo_name=repo_name, branch=branch, user=user)
+    pdf_bytes = await service.export_pdf(
+        scan_id, repo_name=repo_name, branch=branch, target_url=scan.get("target_url"), user=user,
+    )
     if not pdf_bytes:
         raise HTTPException(status_code=404, detail="Scan not found or PDF generation failed")
 

@@ -14,6 +14,7 @@ product yet.
 """
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.domain.analysis.dast import session as session_module
@@ -29,9 +30,11 @@ from app.domain.analysis.dast.race_probe import RaceProbeConfig, run_race_probe
 from app.domain.analysis.dast.rule_loader import load_dynamic_queries
 from app.domain.analysis.dast.session import DastSession, DastSessionPair
 from app.domain.analysis.dast.ssrf_probe import run_ssrf_probe
+from app.domain.analysis.dast.state_crawler import crawl_form_transitions
 from app.domain.analysis.dast.verdict import Verdict
 from app.domain.analysis.dast.xss_probe import run_stored_xss_probe
 from tests.fixtures.dast_vuln_server import (
+    CSRF_LOGIN_TOKEN_VALUE,
     LOGIN_PASSWORD,
     LOGIN_USERNAME,
     OWNER_BEARER_TOKEN,
@@ -502,3 +505,68 @@ class TestOpenApiDiscoveryLive:
         products_findings = findings_by_url[f"{base_url}/products?id=1"]
         by_rule = {f.rule_id: f for f in products_findings}
         assert by_rule["SQL_INJECTION_LIVE"].verdict == Verdict.FAIL
+
+
+class TestStateCrawlerLive:
+    # /profile-update's form only ever appears in /flow-login's own POST
+    # response body — nothing links to it, and nothing serves it on a GET
+    # page. Only actually submitting the discovered login form (not just
+    # crawling links) reveals it, proving crawl_form_transitions really
+    # drives a live login -> next-step chain over a real socket, not a
+    # mocked one.
+    async def test_login_form_submission_reveals_profile_update_form(self, base_url):
+        async with await _session() as session:
+            crawl_result = await crawl(session, base_url + "/flow-start")
+            assert crawl_result.forms, "crawler should have discovered the /flow-login form"
+
+            result = await crawl_form_transitions(
+                session, crawl_result.forms, base_url, active_mode=True,
+            )
+
+        assert any(f.action_url == f"{base_url}/profile-update" for f in result.forms)
+
+    async def test_skipped_without_active_mode(self, base_url):
+        async with await _session() as session:
+            crawl_result = await crawl(session, base_url + "/flow-start")
+            result = await crawl_form_transitions(
+                session, crawl_result.forms, base_url, active_mode=False,
+            )
+
+        assert result.forms == []
+        assert result.urls == []
+
+
+class TestCsrfLoginLive:
+    # DastSession._authenticate's COOKIE + CSRF branch, over a real socket:
+    # GET /csrf-login-form for the token, then POST /csrf-login with it —
+    # /csrf-login 403s on any request missing the exact token, so a
+    # successful __aenter__ (no HTTPStatusError) is proof the fetch-then-post
+    # sequence actually worked, not just that the code path was exercised.
+    async def test_csrf_token_fetched_and_login_succeeds(self, base_url):
+        form = FormLoginConfig(
+            login_url=base_url + "/csrf-login", username_field="username", password_field="password",
+            username=LOGIN_USERNAME, password=LOGIN_PASSWORD,
+            csrf_field="csrf_token", csrf_source_url=base_url + "/csrf-login-form",
+        )
+        actor = ActorConfig(auth_mode=AuthMode.FORM_LOGIN, form_login=form)
+        async with DastSession(actor) as session:
+            cookies, _ = session.browser_auth_state()
+
+        assert any(c["name"] == "csrf_session" and c["value"] == "authenticated" for c in cookies)
+
+    async def test_wrong_csrf_field_name_fails_login(self, base_url):
+        # Regression guard for the fixture itself: /csrf-login must actually
+        # reject a request missing the real token, not just accept
+        # username/password alone — otherwise the success test above
+        # wouldn't prove anything about the CSRF fetch actually happening.
+        # Posting the token under the wrong field name means /csrf-login
+        # never receives a 'csrf_token' at all.
+        form = FormLoginConfig(
+            login_url=base_url + "/csrf-login", username_field="username", password_field="password",
+            username=LOGIN_USERNAME, password=LOGIN_PASSWORD,
+            csrf_field="wrong_field_name", csrf_source_url=base_url + "/csrf-login-form",
+        )
+        actor = ActorConfig(auth_mode=AuthMode.FORM_LOGIN, form_login=form)
+        with pytest.raises(httpx.HTTPStatusError):
+            async with DastSession(actor):
+                pass

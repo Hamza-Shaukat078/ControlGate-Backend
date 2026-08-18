@@ -89,6 +89,32 @@ class TestArchiveSymlinkExtractionPerf:
         assert _sanitizer_present(self.RULE, code)
 
 
+class TestMultiTableWriteWithoutTransactionPerf:
+    """MULTI_TABLE_WRITE_WITHOUT_TRANSACTION (V2.3.3) was built after this
+    file's ReDoS postmortem, specifically to avoid repeating it: the anchor
+    + bounded-gap shape here has no inline lookahead at all, and the
+    transaction-boundary check is the same whole-file `sanitizers` mechanism
+    ZIPSLIP_VULNERABILITY/ARCHIVE_SYMLINK_EXTRACTION were fixed to use."""
+
+    RULE = "MULTI_TABLE_WRITE_WITHOUT_TRANSACTION"
+
+    def test_fast_on_adversarial_input(self):
+        _assert_fast_on_adversarial_input(self.RULE)
+
+    def test_still_detects_unwrapped_writes(self):
+        assert _fires(self.RULE, "db.session.add(order)\ndb.session.add(inventory_row)")
+
+    def test_wrapper_before_writes_not_suppressed_but_downgradeable(self):
+        # The exact shape that broke the naive "lookahead after the anchor"
+        # fix for the other two rules: the transaction wrapper is opened
+        # *before* the writes it protects, which a forward-only window can't
+        # see. The regex still fires; the whole-file sanitizer check is what
+        # softens it, order-independent.
+        code = "with transaction.atomic():\n    db.session.add(order)\n    db.session.add(inventory_row)"
+        assert _fires(self.RULE, code)
+        assert _sanitizer_present(self.RULE, code)
+
+
 class TestOidcIssuerNotValidatedPerf:
     RULE = "OIDC_ISSUER_NOT_VALIDATED"
 

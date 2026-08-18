@@ -8,7 +8,7 @@
     "level": "L2",
     "description": "Verify that the application protects against Server-side Request Forgery (SSRF) attacks, by validating untrusted data against an allowlist of protocols, domains, paths and ports and sanitizing potentially dangerous characters before using the data to call another service.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "AWS_METADATA_ACCESS, AZURE_METADATA_ACCESS, GCP_METADATA_ACCESS, IMDS_TOKENLESS, SSRF"
   },
   {
     "control_id": "V1.3.7",
@@ -19,7 +19,7 @@
     "level": "L2",
     "description": "Verify that the application protects against template injection attacks by not allowing templates to be built based on untrusted input. Where there is no alternative, any untrusted input being included dynamically during template creation must be sanitized or strictly validated.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "TEMPLATE_INJECTION"
   },
   {
     "control_id": "V3.3.2",
@@ -30,7 +30,7 @@
     "level": "L2",
     "description": "Verify that each cookie's 'SameSite' attribute value is set according to the purpose of the cookie, to limit exposure to user interface redress attacks and browser-based request forgery attacks, commonly known as cross-site request forgery (CSRF).",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "COOKIE_MISSING_SAMESITE"
   },
   {
     "control_id": "V3.3.4",
@@ -41,7 +41,7 @@
     "level": "L2",
     "description": "Verify that if the value of a cookie is not meant to be accessible to client-side scripts (such as a session token), the cookie must have the 'HttpOnly' attribute set and the same value (e.g. session token) must only be transferred to the client via the 'Set-Cookie' header field.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "COOKIE_MISSING_HTTPONLY"
   },
   {
     "control_id": "V3.4.4",
@@ -52,7 +52,7 @@
     "level": "L2",
     "description": "Verify that all HTTP responses contain an 'X-Content-Type-Options: nosniff' header field. This instructs browsers not to use content sniffing and MIME type guessing for the given response, and to require the response's Content-Type header field value to match the destination resource.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V3.4.5",
@@ -63,7 +63,7 @@
     "level": "L2",
     "description": "Verify that the application sets a referrer policy to prevent leakage of technically sensitive data to third-party services via the 'Referer' HTTP request header field. This can be done using the Referrer-Policy HTTP response header field or via HTML element attributes.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V3.4.6",
@@ -74,7 +74,7 @@
     "level": "L2",
     "description": "Verify that the web application uses the frame-ancestors directive of the Content-Security-Policy header field for every HTTP response to ensure that it cannot be embedded by default and that embedding of specific resources is allowed only when necessary. Note that the X-Frame-Options header field, although supported by browsers, is obsolete and may not be relied upon.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V11.5.1",
@@ -85,7 +85,7 @@
     "level": "L2",
     "description": "Verify that all random numbers and strings which are intended to be non-guessable must be generated using a cryptographically secure pseudo-random number generator (CSPRNG) and have at least 128 bits of entropy. Note that UUIDs do not respect this condition.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "INSECURE_RANDOM"
   },
   {
     "control_id": "V13.4.2",
@@ -96,7 +96,7 @@
     "level": "L2",
     "description": "Verify that debug modes are disabled for all components in production environments to prevent exposure of debugging features and information leakage.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "DEBUG_MODE_ENABLED"
   },
   {
     "control_id": "V15.3.3",
@@ -107,7 +107,7 @@
     "level": "L2",
     "description": "Verify that the application has countermeasures to protect against mass assignment attacks by limiting allowed fields per controller and action, e.g., it is not possible to insert or update a field value when it was not intended to be part of that action.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "MASS_ASSIGNMENT"
   },
   {
     "control_id": "V1.2.9",
@@ -118,7 +118,7 @@
     "level": "L2",
     "description": "Verify that the application escapes special characters in regular expressions (typically using a backslash) to prevent them from being misinterpreted as metacharacters.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "REGEX_DOS"
   },
   {
     "control_id": "V3.7.2",
@@ -129,7 +129,7 @@
     "level": "L2",
     "description": "Verify that the application will only automatically redirect the user to a different hostname or domain (which is not controlled by the application) where the destination appears on an allowlist.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "UNVALIDATED_REDIRECT"
   },
   {
     "control_id": "V4.3.2",
@@ -140,7 +140,7 @@
     "level": "L2",
     "description": "Verify that GraphQL introspection queries are disabled in the production environment unless the GraphQL API is meant to be used by other parties.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "GRAPHQL_INTROSPECTION_ENABLED"
   },
   {
     "control_id": "V5.4.1",
@@ -151,7 +151,7 @@
     "level": "L2",
     "description": "Verify that the application validates or ignores user-submitted filenames, including in a JSON, JSONP, or URL parameter and specifies a filename in the Content-Disposition header field in the response.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "PATH_TRAVERSAL"
   },
   {
     "control_id": "V9.2.3",
@@ -162,7 +162,7 @@
     "level": "L2",
     "description": "Verify that the service only accepts tokens which are intended for use with that service (audience). For JWTs, this can be achieved by validating the 'aud' claim against an allowlist defined in the service.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "JWT_MISSING_AUDIENCE_CHECK"
   },
   {
     "control_id": "V11.4.2",
@@ -173,7 +173,7 @@
     "level": "L2",
     "description": "Verify that passwords are stored using an approved, computationally intensive, key derivation function (also known as a \"password hashing function\"), with parameter settings configured based on current guidance. The settings should balance security and performance to make brute-force attacks sufficiently challenging for the required level of security.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "WEAK_PASSWORD_HASHING"
   },
   {
     "control_id": "V13.4.3",
@@ -184,7 +184,7 @@
     "level": "L2",
     "description": "Verify that web servers do not expose directory listings to clients unless explicitly intended.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V13.4.4",
@@ -195,7 +195,7 @@
     "level": "L2",
     "description": "Verify that using the HTTP TRACE method is not supported in production environments, to avoid potential information leakage.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V14.3.2",
@@ -206,7 +206,7 @@
     "level": "L2",
     "description": "Verify that the application sets sufficient anti-caching HTTP response header fields (i.e., Cache-Control: no-store) so that sensitive data is not cached in browsers.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V14.2.2",
@@ -217,7 +217,7 @@
     "level": "L2",
     "description": "Verify that sensitive data (passwords, tokens, SSNs, card numbers) is not cached server-side without a short TTL or explicit cache exclusion.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "CACHED_SENSITIVE_DATA_SERVER_SIDE"
   },
   {
     "control_id": "V14.2.3",
@@ -228,7 +228,7 @@
     "level": "L2",
     "description": "Verify that sensitive data is not sent to third-party analytics, tracking, or error-reporting services.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SENSITIVE_DATA_TO_THIRD_PARTY_TRACKER"
   },
   {
     "control_id": "V15.3.2",
@@ -239,7 +239,7 @@
     "level": "L2",
     "description": "Verify that where the application backend makes calls to external URLs, it is configured to not follow redirects unless it is intended functionality.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "FOLLOWS_REDIRECTS_ON_EXTERNAL_CALL"
   },
   {
     "control_id": "V15.3.4",
@@ -250,7 +250,7 @@
     "level": "L2",
     "description": "Verify that the application does not trust the X-Forwarded-For header or the raw connection IP for security decisions unless the request is validated as coming through a configured trusted proxy.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SPOOFABLE_PROXY_HEADER"
   },
   {
     "control_id": "V15.3.7",
@@ -261,7 +261,7 @@
     "level": "L2",
     "description": "Verify that the application defends against HTTP parameter pollution, either by validating for duplicate query parameters before use or via hpp-style middleware.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "HTTP_PARAMETER_POLLUTION_MISSING_DEFENSE"
   },
   {
     "control_id": "V15.1.2",
@@ -272,7 +272,7 @@
     "level": "L2",
     "description": "Verify that a Software Bill of Materials (SBOM) is generated and maintained for the application's third-party components.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SBOM_MAINTAINED_MARKER"
   },
   {
     "control_id": "V15.2.3",
@@ -283,7 +283,7 @@
     "level": "L2",
     "description": "Verify that no test, debug, or sample code (leftover debug routes, hardcoded test-user credentials, unguarded 'remove before prod' markers) ships in the production build.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "TEST_DEBUG_CODE_IN_PRODUCTION"
   },
   {
     "control_id": "V3.3.3",
@@ -294,7 +294,7 @@
     "level": "L2",
     "description": "Verify that cookies have the '__Host-' prefix for the cookie name unless they are explicitly designed to be shared with other hosts.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "COOKIE_HOST_PREFIX_MISSING"
   },
   {
     "control_id": "V3.5.5",
@@ -305,7 +305,7 @@
     "level": "L2",
     "description": "Verify that messages received by the postMessage interface are discarded if the origin of the message is not trusted, or if the syntax of the message is invalid.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "POSTMESSAGE_ORIGIN_NOT_CHECKED"
   },
   {
     "control_id": "V3.7.1",
@@ -316,7 +316,7 @@
     "level": "L2",
     "description": "Verify that the application only uses client-side technologies which are still supported and considered secure. Examples of technologies which do not meet this requirement include NSAPI plugins, Flash, Shockwave, ActiveX, Silverlight, NACL, or client-side Java applets.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "DEPRECATED_CLIENT_TECH"
   },
   {
     "control_id": "V4.1.3",
@@ -327,7 +327,7 @@
     "level": "L2",
     "description": "Verify that any HTTP header field used by the application and set by an intermediary layer, such as a load balancer, a web proxy, or a backend-for-frontend service, cannot be overridden by the end-user. Example headers might include X-Real-IP, X-Forwarded-*, or X-User-ID.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SPOOFABLE_PROXY_HEADER"
   },
   {
     "control_id": "V4.2.1",
@@ -338,7 +338,7 @@
     "level": "L2",
     "description": "Verify that all application components (including load balancers, firewalls, and application servers) determine boundaries of incoming HTTP messages using the appropriate mechanism for the HTTP version to prevent HTTP request smuggling. In HTTP/1.x, if a Transfer-Encoding header field is present, the Content-Length header must be ignored per RFC 2616. When using HTTP/2 or HTTP/3, if a Content-Length header field is present, the receiver must ensure that it is consistent with the length of the DATA frames.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "HTTP_REQUEST_SMUGGLING"
   },
   {
     "control_id": "V4.1.4",
@@ -349,7 +349,7 @@
     "level": "L3",
     "description": "Verify that only HTTP methods explicitly supported by the application or its API (including OPTIONS during preflight requests) can be used, and that unused methods are blocked.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V4.1.5",
@@ -382,7 +382,7 @@
     "level": "L3",
     "description": "Verify that the application does not send nor accept HTTP/2 or HTTP/3 messages with connection-specific header fields such as Transfer-Encoding, to prevent response splitting and header injection attacks.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "MANUAL_TRANSFER_ENCODING_HEADER"
   },
   {
     "control_id": "V4.2.4",
@@ -404,7 +404,7 @@
     "level": "L3",
     "description": "Verify that, if the application (backend or frontend) builds and sends requests, it uses validation, sanitization, or other mechanisms to avoid creating URIs or HTTP request header fields (such as Authorization or Cookie) which are too long to be accepted by the receiving component, preventing a denial of service.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "REQUEST_LENGTH_VALIDATION_MARKER"
   },
   {
     "control_id": "V4.3.1",
@@ -415,7 +415,7 @@
     "level": "L2",
     "description": "Verify that a query allowlist, depth limiting, amount limiting, or query cost analysis is used to prevent GraphQL or data layer expression Denial of Service (DoS) as a result of expensive, nested queries.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "GRAPHQL_NO_COST_LIMIT"
   },
   {
     "control_id": "V4.4.2",
@@ -426,7 +426,7 @@
     "level": "L2",
     "description": "Verify that, during the initial HTTP WebSocket handshake, the Origin header field is checked against a list of origins allowed for the application.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "WEBSOCKET_ORIGIN_NOT_CHECKED"
   },
   {
     "control_id": "V5.2.3",
@@ -437,7 +437,7 @@
     "level": "L2",
     "description": "Verify that the application checks compressed files (e.g., zip, gz, docx, odt) against maximum allowed uncompressed size and against maximum number of files before uncompressing the file.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "ZIPSLIP_VULNERABILITY"
   },
   {
     "control_id": "V5.2.4",
@@ -448,7 +448,7 @@
     "level": "L3",
     "description": "Verify that the application enforces per-user file upload quotas and maximum file counts so a single user cannot exhaust storage.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "UPLOAD_QUOTA_PER_USER_MARKER"
   },
   {
     "control_id": "V5.2.5",
@@ -459,7 +459,7 @@
     "level": "L3",
     "description": "Verify that compressed file extraction rejects symlink entries unless explicitly required and restricted by an allowlist.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "ARCHIVE_SYMLINK_EXTRACTION"
   },
   {
     "control_id": "V5.2.6",
@@ -470,7 +470,7 @@
     "level": "L3",
     "description": "Verify that uploaded images are rejected when their width, height, or total pixel count exceeds configured limits.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "UPLOAD_IMAGE_DIMENSION_LIMIT_MARKER"
   },
   {
     "control_id": "V5.3.3",
@@ -481,7 +481,7 @@
     "level": "L3",
     "description": "Verify that server-side decompression ignores or validates archive entry paths so extraction cannot write outside the intended directory.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "ZIPSLIP_VULNERABILITY"
   },
   {
     "control_id": "V5.4.2",
@@ -492,7 +492,7 @@
     "level": "L2",
     "description": "Verify that file names served (e.g., in HTTP response header fields or email attachments) are encoded or sanitized (e.g., following RFC 6266) to preserve document structure and prevent injection attacks.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "UNSAFE_DOWNLOAD_FILENAME_ENCODING"
   },
   {
     "control_id": "V9.2.2",
@@ -503,7 +503,7 @@
     "level": "L2",
     "description": "Verify that the service receiving a token validates the token to be the correct type and is meant for the intended purpose before accepting the token's contents. For example, only access tokens can be accepted for authorization decisions and only ID Tokens can be used for proving user authentication.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "JWT_TOKEN_TYPE_NOT_VALIDATED"
   },
   {
     "control_id": "V11.2.3",
@@ -514,7 +514,7 @@
     "level": "L2",
     "description": "Verify that all cryptographic primitives utilize a minimum of 128-bits of security based on the algorithm, key size, and configuration. For example, a 256-bit ECC key provides roughly 128 bits of security where RSA requires a 3072-bit key to achieve 128 bits of security.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "INSUFFICIENT_CRYPTO_KEY_SIZE"
   },
   {
     "control_id": "V11.3.3",
@@ -525,7 +525,7 @@
     "level": "L2",
     "description": "Verify that encrypted data is protected against unauthorized modification preferably by using an approved authenticated encryption method or by combining an approved encryption method with an approved MAC algorithm.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "UNAUTHENTICATED_ENCRYPTION_MODE"
   },
   {
     "control_id": "V13.2.3",
@@ -536,7 +536,7 @@
     "level": "L2",
     "description": "Verify that if a credential has to be used for service authentication, the credential being used by the consumer is not a default credential (e.g., root/root or admin/admin).",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "DEFAULT_CREDENTIALS"
   },
   {
     "control_id": "V13.4.5",
@@ -547,7 +547,7 @@
     "level": "L2",
     "description": "Verify that documentation (such as for internal APIs) and monitoring endpoints are not exposed unless explicitly intended.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "EXPOSED_DEBUG_MONITORING_ENDPOINT"
   },
   {
     "control_id": "V14.3.3",
@@ -558,7 +558,7 @@
     "level": "L2",
     "description": "Verify that data stored in browser storage (such as localStorage, sessionStorage, IndexedDB, or cookies) does not contain sensitive data, with the exception of session tokens.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SENSITIVE_DATA_IN_BROWSER_STORAGE"
   },
   {
     "control_id": "V15.3.6",
@@ -569,7 +569,7 @@
     "level": "L2",
     "description": "Verify that JavaScript code is written in a way that prevents prototype pollution, for example, by using Set() or Map() instead of object literals.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "PROTOTYPE_POLLUTION"
   },
   {
     "control_id": "V16.5.1",
@@ -580,7 +580,7 @@
     "level": "L2",
     "description": "Verify that a generic message is returned to the consumer when an unexpected or security-sensitive error occurs, ensuring no exposure of sensitive internal system data such as stack traces, queries, secret keys, and tokens.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "INFORMATION_EXPOSURE_ERROR, STACK_TRACE_EXPOSED_TO_CLIENT"
   },
   {
     "control_id": "V16.5.3",
@@ -591,7 +591,7 @@
     "level": "L2",
     "description": "Verify that the application fails securely on unexpected errors: an exception raised inside an auth/authorization check must deny access rather than default to allow.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "AUTH_CHECK_FAILS_OPEN"
   },
   {
     "control_id": "V1.2.6",
@@ -602,7 +602,7 @@
     "level": "L2",
     "description": "Verify that the application uses LDAP-safe APIs or context-appropriate escaping (e.g. escape_filter_chars) before using untrusted data to construct LDAP search filters or distinguished names, to prevent LDAP injection.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "LDAP_INJECTION"
   },
   {
     "control_id": "V1.2.7",
@@ -613,7 +613,7 @@
     "level": "L2",
     "description": "Verify that the application uses parameterized XPath queries or context-appropriate escaping before using untrusted data to construct XPath expressions, to prevent XPath injection.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "XPATH_INJECTION"
   },
   {
     "control_id": "V1.3.4",
@@ -624,7 +624,7 @@
     "level": "L2",
     "description": "Verify that user-uploaded or user-supplied SVG images are sanitized to remove scripting elements (such as <script> and <foreignObject>) using a dedicated sanitizer library before being stored, rendered, or served.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SVG_SCRIPT_SANITIZATION"
   },
   {
     "control_id": "V1.3.5",
@@ -635,7 +635,7 @@
     "level": "L2",
     "description": "Verify that Markdown or other scriptable template/markup renderers are configured to disallow raw HTML, or that their output is passed through an HTML sanitizer, before being included in a page.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SCRIPTABLE_TEMPLATE_SANITIZATION"
   },
   {
     "control_id": "V1.3.10",
@@ -646,7 +646,7 @@
     "level": "L2",
     "description": "Verify that untrusted data is never used as a format string itself, only as an argument to a format string defined by the application, to prevent format string injection.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "FORMAT_STRING_INJECTION"
   },
   {
     "control_id": "V1.3.11",
@@ -657,7 +657,7 @@
     "level": "L2",
     "description": "Verify that untrusted data used to construct email headers (To, Cc, Bcc, Subject, Reply-To) is stripped of CR/LF sequences or otherwise validated, to prevent SMTP/IMAP header injection.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "EMAIL_HEADER_INJECTION"
   },
   {
     "control_id": "V1.5.2",
@@ -668,7 +668,7 @@
     "level": "L2",
     "description": "Verify that deserializers for formats capable of arbitrary code execution (such as pickle or unrestricted YAML) are only used on data from trusted sources, or are configured with a strict type allowlist when handling network/request data.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "INSECURE_DESERIALIZATION"
   },
   {
     "control_id": "V6.2.9",
@@ -679,7 +679,7 @@
     "level": "L2",
     "description": "Verify that the maximum password length permitted is at least 64 characters, so that passphrases and password-manager-generated passwords are not arbitrarily rejected.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "PASSWORD_MAX_LENGTH_TOO_SHORT"
   },
   {
     "control_id": "V6.2.12",
@@ -690,7 +690,7 @@
     "level": "L2",
     "description": "Verify that when a new password, passphrase, or PIN is set, it is checked against a breached-credential source (e.g. the HaveIBeenPwned Pwned Passwords API or an equivalent local breach corpus) and rejected if found.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "WEAK_PASSWORD_NO_BANNED_LIST_CHECK"
   },
   {
     "control_id": "V6.5.3",
@@ -701,7 +701,7 @@
     "level": "L2",
     "description": "Verify that lookup secrets, one-time codes, and other out-of-band verifier values are generated using a cryptographically secure random number generator (CSPRNG), not a general-purpose pseudo-random number generator.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OTP_INSECURE_RANDOM"
   },
   {
     "control_id": "V6.5.4",
@@ -712,7 +712,7 @@
     "level": "L2",
     "description": "Verify that lookup secrets and one-time codes have at least 20 bits of entropy (typically a randomly generated 6-digit number or larger) to protect against brute-force guessing.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "WEAK_OTP_ENTROPY"
   },
   {
     "control_id": "V6.6.3",
@@ -723,7 +723,7 @@
     "level": "L2",
     "description": "Verify that the out-of-band verifier's OTP/code entry endpoint is rate limited so an attacker cannot brute-force the code within its validity window.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OTP_ENDPOINT_RATE_LIMITING"
   },
   {
     "control_id": "V7.3.1",
@@ -734,7 +734,7 @@
     "level": "L2",
     "description": "Verify that the application enforces an idle/inactivity timeout after which the session is invalidated and the user must re-authenticate.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SESSION_INACTIVITY_TIMEOUT_MARKER, SESSION_TOKEN_NO_EXPIRY_CONFIGURED"
   },
   {
     "control_id": "V7.5.1",
@@ -745,7 +745,7 @@
     "level": "L2",
     "description": "Verify that changing a sensitive account attribute (email, phone number, or MFA/2FA settings) requires the user to re-authenticate or confirm their current password.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SENSITIVE_CHANGE_NO_REAUTH"
   },
   {
     "control_id": "V8.2.3",
@@ -756,7 +756,7 @@
     "level": "L2",
     "description": "Verify that API responses use an explicit field-level allowlist rather than serializing an entire model object, to prevent excessive data exposure (BOPLA) of fields the consumer should not receive.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "EXCESSIVE_DATA_EXPOSURE_BOPLA"
   },
   {
     "control_id": "V11.2.1",
@@ -767,7 +767,7 @@
     "level": "L2",
     "description": "Verify that only industry-validated cryptographic libraries or vetted secure hardware are used, and that no hand-rolled or custom cryptographic primitives are implemented by the application.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "HANDROLLED_CRYPTO_PRIMITIVE"
   },
   {
     "control_id": "V12.3.2",
@@ -778,7 +778,7 @@
     "level": "L2",
     "description": "Verify that TLS clients used by the application validate the server's certificate (no verify=False, rejectUnauthorized: false, or NODE_TLS_REJECT_UNAUTHORIZED=0).",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "DISABLED_CERTIFICATE_VALIDATION"
   },
   {
     "control_id": "V12.1.2",
@@ -789,7 +789,7 @@
     "level": "L2",
     "description": "Verify that only recommended, strong TLS cipher suites are enabled on server-side TLS configuration (nginx ssl_ciphers, application-level TLS context), with weak ciphers such as RC4/3DES/NULL/EXPORT/MD5 disabled.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "WEAK_TLS_CIPHER_SUITE"
   },
   {
     "control_id": "V12.3.3",
@@ -800,7 +800,7 @@
     "level": "L2",
     "description": "Verify that internal service-to-service HTTP calls use TLS-protected endpoints rather than plaintext HTTP, even when the destination host is on a private network or service mesh.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "INTERNAL_SERVICE_PLAINTEXT_HTTP"
   },
   {
     "control_id": "V13.2.4",
@@ -811,7 +811,7 @@
     "level": "L2",
     "description": "Verify that outbound requests to external resources (webhooks, callback URLs, redirects) are validated against an allowlist of permitted hosts before the request is made.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OUTBOUND_REQUEST_ALLOWLIST_CHECK"
   },
   {
     "control_id": "V13.2.1",
@@ -822,7 +822,7 @@
     "level": "L2",
     "description": "Verify that service-to-service authentication uses short-term, dynamically issued credentials (client-credentials grant, cloud STS AssumeRole, Vault dynamic secrets) rather than a static, long-lived password or API key.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SERVICE_AUTH_SHORT_LIVED_CREDENTIALS_MARKER"
   },
   {
     "control_id": "V13.2.5",
@@ -833,7 +833,7 @@
     "level": "L2",
     "description": "Verify that a server-level allowlist (nginx/firewall egress-restriction directives, Kubernetes NetworkPolicy) restricts outbound connections to approved external resources.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx, ConfigInspector._inspect_yaml"
   },
   {
     "control_id": "V15.3.5",
@@ -844,7 +844,7 @@
     "level": "L2",
     "description": "Verify that strict type checks and strict equality (===, !==) are used for security-relevant comparisons in JavaScript, rather than loose equality (==, !=) which performs type coercion.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "JS_LOOSE_EQUALITY_SECURITY_CHECK"
   },
   {
     "control_id": "V16.4.1",
@@ -855,7 +855,7 @@
     "level": "L2",
     "description": "Verify that untrusted data written to log entries is encoded or has newline/control characters stripped, to prevent log injection and log forging.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "LOG_INJECTION"
   },
   {
     "control_id": "V16.2.2",
@@ -866,7 +866,7 @@
     "level": "L2",
     "description": "Verify that log entries use synchronized, unambiguous timestamps (UTC, ISO8601) rather than unqualified local time, so events can be correlated across services.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "UTC_TIMESTAMP_LOGGING_MARKER"
   },
   {
     "control_id": "V16.2.5",
@@ -877,7 +877,7 @@
     "level": "L2",
     "description": "Verify that sensitive data (passwords, tokens, SSNs, card numbers) is masked or redacted before being written to a log entry.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SENSITIVE_DATA_IN_LOG_STATEMENT, SENSITIVE_LOGGING"
   },
   {
     "control_id": "V16.3.1",
@@ -888,7 +888,7 @@
     "level": "L2",
     "description": "Verify that all authentication operations (login, logout, password change, MFA) are logged.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "AUTH_OPERATION_LOGGED_MARKER, AUTH_FAILURE_SILENTLY_SWALLOWED"
   },
   {
     "control_id": "V16.3.2",
@@ -899,7 +899,7 @@
     "level": "L2",
     "description": "Verify that failed authorization attempts (access-denied decisions) are logged.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "AUTHZ_DENIAL_LOGGED_MARKER, AUTH_FAILURE_SILENTLY_SWALLOWED"
   },
   {
     "control_id": "V16.3.4",
@@ -910,7 +910,7 @@
     "level": "L2",
     "description": "Verify that unexpected errors and security control failures (exceptions caught and silently discarded) are logged rather than swallowed.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "EXCEPT_PASS_NO_LOG, HTTP_ERROR_HANDLER_SILENT"
   },
   {
     "control_id": "V1.1.2",
@@ -921,7 +921,7 @@
     "level": "L2",
     "description": "Verify that output encoding is applied as the final step immediately before data is interpreted, and that encoded data is not later concatenated with additional untrusted input.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OUTPUT_ENCODING_NOT_FINAL_STEP"
   },
   {
     "control_id": "V1.2.8",
@@ -932,7 +932,7 @@
     "level": "L2",
     "description": "Verify that LaTeX source generation escapes user-controlled control characters and that LaTeX compilers are not invoked with shell escape enabled for untrusted documents.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "LATEX_INJECTION"
   },
   {
     "control_id": "V1.3.8",
@@ -943,7 +943,7 @@
     "level": "L2",
     "description": "Verify that JNDI lookup names are not built from untrusted input through string concatenation and are validated against an allowlist.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "JNDI_INJECTION"
   },
   {
     "control_id": "V1.3.9",
@@ -954,7 +954,7 @@
     "level": "L2",
     "description": "Verify that memcache keys and values built from user input are sanitized or encoded before being passed to cache get/set operations.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "MEMCACHE_INJECTION"
   },
   {
     "control_id": "V2.4.1",
@@ -965,7 +965,7 @@
     "level": "L2",
     "description": "Verify that business-critical endpoints such as checkout, bulk export, and invite sending include anti-automation controls such as rate limiting or CAPTCHA.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "BUSINESS_ENDPOINT_ANTI_AUTOMATION_MARKER"
   },
   {
     "control_id": "V3.4.3",
@@ -976,7 +976,7 @@
     "level": "L2",
     "description": "Verify that Content-Security-Policy includes a complete baseline policy with frame-ancestors, object-src 'none', and base-uri 'none'.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V6.2.10",
@@ -987,7 +987,7 @@
     "level": "L2",
     "description": "Verify that the application does not force periodic password rotation solely due to password age, except in response to compromise or risk signals.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "FORCED_PERIODIC_PASSWORD_ROTATION"
   },
   {
     "control_id": "V6.2.11",
@@ -998,7 +998,7 @@
     "level": "L2",
     "description": "Verify that password validation checks an application-specific banned word list, such as company, product, tenant, app, or brand names.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "CONTEXT_SPECIFIC_PASSWORD_BLOCKLIST_MARKER"
   },
   {
     "control_id": "V6.5.1",
@@ -1009,7 +1009,7 @@
     "level": "L2",
     "description": "Verify that OTPs and lookup secrets are single-use and are invalidated, consumed, deleted, or marked used immediately after successful verification.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OTP_SINGLE_USE_NOT_ENFORCED"
   },
   {
     "control_id": "V6.5.2",
@@ -1020,7 +1020,7 @@
     "level": "L2",
     "description": "Verify that low-entropy lookup secrets such as recovery codes or API keys are stored as salted password-style hashes, not plaintext fields.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "PLAINTEXT_LOOKUP_SECRET_STORAGE"
   },
   {
     "control_id": "V6.5.5",
@@ -1031,7 +1031,7 @@
     "level": "L2",
     "description": "Verify that OTP and out-of-band verifier codes have short lifetimes, including no more than 10 minutes for OOB codes and no more than 30 seconds for TOTP.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OTP_OOB_LIFETIME_TOO_LONG"
   },
   {
     "control_id": "V6.8.2",
@@ -1042,7 +1042,7 @@
     "level": "L2",
     "description": "Verify that JWTs and SAML assertions are cryptographically verified and that assertion or message signature verification is not disabled.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SESSION_VERIFICATION_BYPASSED"
   },
   {
     "control_id": "V6.8.4",
@@ -1053,7 +1053,7 @@
     "level": "L2",
     "description": "Verify that the relying party validates the acr and amr claims/attributes from the identity provider's assertion or token before granting access to a sensitive action requiring a specific authentication strength.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "STEPUP_CLAIMS_NOT_VALIDATED"
   },
   {
     "control_id": "V7.3.2",
@@ -1064,7 +1064,7 @@
     "level": "L2",
     "description": "Verify that sessions have an absolute maximum lifetime independent of inactivity timeout.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SESSION_ABSOLUTE_LIFETIME_MARKER"
   },
   {
     "control_id": "V10.1.2",
@@ -1075,7 +1075,7 @@
     "level": "L2",
     "description": "Verify that the OAuth client only accepts state, code, and other callback values that were initiated by that user's own session, preventing login CSRF via a crafted callback.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OAUTH_CALLBACK_STATE_NOT_VALIDATED"
   },
   {
     "control_id": "V10.2.1",
@@ -1086,7 +1086,7 @@
     "level": "L2",
     "description": "Verify that OAuth authorization requests include CSRF and replay protection using state and PKCE code challenge where applicable.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OAUTH_AUTHZ_MISSING_STATE_PKCE"
   },
   {
     "control_id": "V10.2.2",
@@ -1097,7 +1097,7 @@
     "level": "L2",
     "description": "Verify that the OAuth/OIDC client validates the iss (issuer) claim or parameter against the expected authorization server before proceeding, to defend against mix-up attacks across multiple trusted issuers.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OIDC_ISSUER_NOT_VALIDATED"
   },
   {
     "control_id": "V10.3.1",
@@ -1108,7 +1108,7 @@
     "level": "L2",
     "description": "Verify that the resource server validates the token audience before accepting a bearer token, rejecting tokens issued for a different service.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "JWT_MISSING_AUDIENCE_CHECK"
   },
   {
     "control_id": "V10.3.3",
@@ -1119,7 +1119,7 @@
     "level": "L2",
     "description": "Verify that the application constructs a unique user identifier from the combination of the iss (issuer) and sub (subject) claims, rather than sub alone.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OIDC_USER_LOOKUP_MISSING_ISSUER"
   },
   {
     "control_id": "V10.3.4",
@@ -1130,7 +1130,7 @@
     "level": "L2",
     "description": "Verify that the resource server validates the acr, amr, and auth_time claims where the operation being authorized requires a specific authentication strength or recency.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "STEPUP_CLAIMS_NOT_VALIDATED"
   },
   {
     "control_id": "V10.4.6",
@@ -1141,7 +1141,7 @@
     "level": "L2",
     "description": "Verify that PKCE is used for the authorization code grant, with a code_challenge and code_challenge_method included in the authorization request.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OAUTH_AUTHZ_MISSING_PKCE"
   },
   {
     "control_id": "V10.4.8",
@@ -1152,7 +1152,7 @@
     "level": "L2",
     "description": "Verify that refresh tokens have an absolute expiration independent of their use or inactivity, after which re-authentication is required.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "REFRESH_TOKEN_NO_EXPIRY"
   },
   {
     "control_id": "V10.4.10",
@@ -1163,7 +1163,7 @@
     "level": "L2",
     "description": "Verify that confidential OAuth clients authenticate backchannel token requests with client secret, client assertion, or equivalent client authentication.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OAUTH_TOKEN_REQUEST_NO_CLIENT_AUTH"
   },
   {
     "control_id": "V10.5.1",
@@ -1174,7 +1174,7 @@
     "level": "L2",
     "description": "Verify that ID token validation checks the nonce claim against the nonce stored during the authorization request.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "ID_TOKEN_NONCE_NOT_CHECKED"
   },
   {
     "control_id": "V10.5.2",
@@ -1185,7 +1185,7 @@
     "level": "L2",
     "description": "Verify that the OIDC client uses the sub claim, not email or name, as the unique identifier linking an ID token to a local account.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OIDC_CLIENT_KEYS_BY_EMAIL_NOT_SUB"
   },
   {
     "control_id": "V10.5.3",
@@ -1196,7 +1196,7 @@
     "level": "L2",
     "description": "Verify that the OIDC client rejects spoofed authorization server metadata by fetching the discovery document over TLS and validating its issuer matches the expected value.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OIDC_DISCOVERY_HTTP_OR_UNVALIDATED"
   },
   {
     "control_id": "V10.5.4",
@@ -1207,7 +1207,7 @@
     "level": "L2",
     "description": "Verify that the OIDC client validates the ID token audience equals its own client_id.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "ID_TOKEN_AUDIENCE_NOT_CHECKED"
   },
   {
     "control_id": "V10.5.5",
@@ -1218,7 +1218,7 @@
     "level": "L2",
     "description": "Verify that a back-channel logout endpoint validates the logout_token, including its events, sid/sub, and typ claims, before terminating a session.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "LOGOUT_TOKEN_NOT_VALIDATED"
   },
   {
     "control_id": "V10.6.1",
@@ -1229,7 +1229,7 @@
     "level": "L2",
     "description": "Verify that the OpenID Provider restricts response_mode so tokens are not returned via the URL fragment, requiring the code response type or form_post response mode instead.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OIDC_OP_ALLOWS_FRAGMENT_RESPONSE"
   },
   {
     "control_id": "V11.4.3",
@@ -1240,7 +1240,7 @@
     "level": "L2",
     "description": "Verify that collision-resistant hash functions with at least 256-bit output are used for signatures and integrity checks.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "WEAK_SIGNATURE_HASH_COLLISION"
   },
   {
     "control_id": "V11.4.4",
@@ -1251,7 +1251,7 @@
     "level": "L2",
     "description": "Verify that password hashing and key derivation functions use stretching parameters consistent with current guidance.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "WEAK_KDF_PARAMETERS"
   },
   {
     "control_id": "V11.6.1",
@@ -1262,7 +1262,7 @@
     "level": "L2",
     "description": "Verify that only approved key-generation algorithms and parameters are used (no weak/undersized EC curves, no DSA, RSA/DH at or above the 128-bit security level).",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "INSUFFICIENT_CRYPTO_KEY_SIZE"
   },
   {
     "control_id": "V12.3.1",
@@ -1273,7 +1273,7 @@
     "level": "L2",
     "description": "Verify that inbound and outbound backend, database, API, and service connections use TLS-protected URLs rather than plaintext HTTP.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "CLEARTEXT_TRANSMISSION, PLAINTEXT_BACKEND_CONNECTION"
   },
   {
     "control_id": "V13.3.1",
@@ -1284,7 +1284,7 @@
     "level": "L2",
     "description": "Verify that secrets are loaded from a secrets management solution or secure runtime configuration instead of being hardcoded in source code.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "HARDCODED_SECRETS"
   },
   {
     "control_id": "V17.3.1",
@@ -1295,7 +1295,7 @@
     "level": "L2",
     "description": "Verify that the WebRTC signaling server is resilient to flooding, applying rate limiting to signaling handlers (offer/answer/ICE-candidate exchange).",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SIGNALING_FLOOD_RATE_LIMITING"
   },
   {
     "control_id": "V1.1.1",
@@ -1438,7 +1438,7 @@
     "level": "L2",
     "description": "Verify that automatic HTTP-to-HTTPS redirection is applied only to user-facing endpoints, and that API/service endpoints instead reject plaintext HTTP outright rather than redirecting.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V4.4.3",
@@ -1658,7 +1658,7 @@
     "level": "L2",
     "description": "Verify that administrators can terminate another user's active session.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "ADMIN_SESSION_TERMINATION_MARKER"
   },
   {
     "control_id": "V7.5.2",
@@ -1669,7 +1669,7 @@
     "level": "L2",
     "description": "Verify that users can view and terminate their own active sessions.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SELF_SERVICE_SESSION_MANAGEMENT_MARKER"
   },
   {
     "control_id": "V7.6.1",
@@ -1713,7 +1713,7 @@
     "level": "L2",
     "description": "Verify that cross-tenant data isolation is enforced throughout the data access layer in multi-tenant applications. Requires a full data-layer architecture review.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "TENANT_ISOLATION_MISSING"
   },
   {
     "control_id": "V9.2.4",
@@ -1768,7 +1768,7 @@
     "level": "L2",
     "description": "Verify that refresh and reference tokens can be revoked via a user- or admin-facing interface.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "TOKEN_REVOCATION_ENDPOINT_MARKER"
   },
   {
     "control_id": "V10.4.11",
@@ -1823,7 +1823,7 @@
     "level": "L2",
     "description": "Verify that users can review and revoke previously granted consents.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "CONSENT_MANAGEMENT_ENDPOINT_MARKER"
   },
   {
     "control_id": "V11.1.1",
@@ -1867,7 +1867,7 @@
     "level": "L2",
     "description": "Verify that mutual TLS (mTLS) client certificates are validated and trusted correctly by the server. Requires live TLS handshake inspection.",
     "detection_strategy": "dynamic_probe",
-    "check_ref": null
+    "check_ref": "DynamicProbe._check_mtls_client_cert_trust"
   },
   {
     "control_id": "V12.3.4",
@@ -1878,7 +1878,7 @@
     "level": "L2",
     "description": "Verify that internal service-to-service TLS connections use trusted or pinned CAs. Requires live connection testing against internal endpoints.",
     "detection_strategy": "dynamic_probe",
-    "check_ref": null
+    "check_ref": "DynamicProbe._check_internal_tls_cert_trust"
   },
   {
     "control_id": "V13.1.1",
@@ -1900,7 +1900,7 @@
     "level": "L2",
     "description": "Verify that service accounts used for backend communication are provisioned with least-privilege access. Requires an IAM/infrastructure review.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_iam_policy_json, ConfigInspector._inspect_terraform, ConfigInspector._inspect_yaml"
   },
   {
     "control_id": "V13.3.2",
@@ -1911,7 +1911,7 @@
     "level": "L2",
     "description": "Verify that access to the secrets vault itself is governed by least privilege. Requires an IAM/infrastructure review.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_iam_policy_json"
   },
   {
     "control_id": "V14.1.1",
@@ -1999,7 +1999,7 @@
     "level": "L2",
     "description": "Verify that logs are only sent to approved logging destinations. Requires an infrastructure configuration review.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "CENTRALIZED_LOG_SHIPPING_MARKER"
   },
   {
     "control_id": "V16.2.4",
@@ -2010,7 +2010,7 @@
     "level": "L2",
     "description": "Verify that logs are correlatable and use a common format across services, per a format-standardization review.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "STRUCTURED_LOGGING_MARKER"
   },
   {
     "control_id": "V16.3.3",
@@ -2032,7 +2032,7 @@
     "level": "L2",
     "description": "Verify that logs are protected from unauthorized access, per an infrastructure access-control review.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_iam_policy_json"
   },
   {
     "control_id": "V16.4.3",
@@ -2043,7 +2043,7 @@
     "level": "L2",
     "description": "Verify that logs are securely transmitted to a separate logging system, per an infrastructure configuration review.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "LOG_TRANSPORT_PLAINTEXT"
   },
   {
     "control_id": "V16.5.2",
@@ -2065,7 +2065,7 @@
     "level": "L2",
     "description": "Verify that the TURN server restricts relay traffic to non-internal IP ranges. Requires TURN-server infrastructure configuration review.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_coturn"
   },
   {
     "control_id": "V17.2.1",
@@ -2087,7 +2087,7 @@
     "level": "L2",
     "description": "Verify that only approved DTLS-SRTP cipher suites are enabled. Requires a live negotiation check.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_coturn"
   },
   {
     "control_id": "V17.2.3",
@@ -2131,7 +2131,7 @@
     "level": "L3",
     "description": "Verify that when the application writes a cookie, the combined cookie name and value length does not exceed 4096 bytes.",
     "detection_strategy": "dynamic_probe",
-    "check_ref": null
+    "check_ref": "DynamicProbe._check_cookie_size"
   },
   {
     "control_id": "V3.4.7",
@@ -2142,7 +2142,7 @@
     "level": "L3",
     "description": "Verify that the Content-Security-Policy header specifies a report-uri or report-to endpoint for policy violation reporting.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V3.4.8",
@@ -2153,7 +2153,7 @@
     "level": "L3",
     "description": "Verify that HTML-rendering responses include Cross-Origin-Opener-Policy with same-origin or same-origin-allow-popups.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V3.5.6",
@@ -2164,7 +2164,7 @@
     "level": "L3",
     "description": "Verify that JSONP functionality is not enabled anywhere in the application.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "JSONP_ENABLED"
   },
   {
     "control_id": "V3.5.7",
@@ -2175,7 +2175,7 @@
     "level": "L3",
     "description": "Verify that data requiring authorization is not included in script resource responses.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "AUTH_DATA_IN_SCRIPT_RESPONSE"
   },
   {
     "control_id": "V3.5.8",
@@ -2186,7 +2186,7 @@
     "level": "L3",
     "description": "Verify that authenticated resources can only be embedded cross-origin when intended, using strict Sec-Fetch validation or a restrictive Cross-Origin-Resource-Policy header.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V3.6.1",
@@ -2197,7 +2197,7 @@
     "level": "L3",
     "description": "Verify that externally hosted client-side assets are static, versioned, and protected with Subresource Integrity unless a documented exception exists.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "EXTERNAL_ASSET_MISSING_SRI"
   },
   {
     "control_id": "V3.7.4",
@@ -2208,7 +2208,7 @@
     "level": "L3",
     "description": "Verify that the application's top-level domain is added to the public HSTS preload list.",
     "detection_strategy": "dynamic_probe",
-    "check_ref": null
+    "check_ref": "DynamicProbe._check_hsts_preload"
   },
   {
     "control_id": "V3.1.1",

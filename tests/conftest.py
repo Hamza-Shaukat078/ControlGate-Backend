@@ -41,6 +41,36 @@ def _disable_real_mongo_startup():
         yield
 
 
+# ── Never let a developer's local .env leak into the SSRF/private-target guard ─
+#
+# app.main imports trigger `load_dotenv()`, which — unlike pydantic-settings'
+# own env_file loading — writes straight into the real os.environ. A developer
+# scanning their own local app (this repo's own workflow: marketplace
+# containers on localhost) sets ALLOW_PRIVATE_SCAN_TARGETS=1 in .env so
+# validate_public_http_url() will accept those targets. That's a legitimate,
+# deliberate per-developer escape hatch (see app/core/network.py's own
+# docstring) — but every test process that imports app.main inherits it too,
+# silently neutering every test that verifies the guard actually rejects
+# loopback/private/link-local targets (confirmed false-negative regression
+# in an unrelated real scan session: ~19 SSRF/TLS-guard tests failed, not
+# because the guard is broken, but because .env's dev convenience flag was
+# leaking into the test suite's own process). Tests must exercise the real,
+# secure-by-default behavior regardless of what's in the machine's local
+# .env; scope=session with a manual pop/restore (rather than the
+# function-scoped `monkeypatch` fixture) keeps this active for every test.
+@pytest.fixture(autouse=True, scope="session")
+def _no_private_scan_targets_leak_from_local_env():
+    import os
+
+    had_value = "ALLOW_PRIVATE_SCAN_TARGETS" in os.environ
+    old_value = os.environ.pop("ALLOW_PRIVATE_SCAN_TARGETS", None)
+    try:
+        yield
+    finally:
+        if had_value:
+            os.environ["ALLOW_PRIVATE_SCAN_TARGETS"] = old_value
+
+
 # ── In-memory MongoDB via mongomock-motor ──────────────────────────────────────
 
 @pytest.fixture(scope="session")

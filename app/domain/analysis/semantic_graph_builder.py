@@ -7,14 +7,12 @@ Uses tree-sitter based CPG parser + interprocedural DFG builder
 Architecture:
 1. CPG Parser (tree-sitter) - AST extraction with full language support
 2. Interprocedural DFG - Data flow across function boundaries
-3. Taint Engine - Vulnerability detection
 """
 
 from app.schemas.graph import SemanticGraph, GraphNode, GraphEdge
 from app.domain.analysis.cpg_parser import CPGParser
 from app.domain.analysis.interprocedural_dfg import InterproceduralDFG
 from app.domain.analysis.semantic_enricher import SemanticGraphEnricher
-from app.domain.analysis.taint_engine import TaintEngine
 from app.enums.node_type import NodeType
 from app.enums.edge_type import EdgeType
 from app.core.trace import trace_step
@@ -31,11 +29,10 @@ class SemanticGraphBuilder:
     - Maintains backward compatibility with SemanticGraph schema
     """
     
-    # Creates CPGParser and TaintEngine for the given language
+    # Creates CPGParser for the given language
     def __init__(self, language: str = "python"):
         self.language = language
         self.cpg_parser = CPGParser()
-        self.taint_engine = TaintEngine()
     
     def build(self, code: str, filename: str = "source.py") -> SemanticGraph:
         trace_step("Graph builder: SemanticGraphBuilder.build() (app/domain/analysis/semantic_graph_builder.py)")

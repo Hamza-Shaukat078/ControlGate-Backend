@@ -74,15 +74,32 @@ def _fake_collaborator(monkeypatch):
     )
 
 
+class _FakePrimarySession:
+    """Stands in for pair.primary — just enough surface for the
+    logout-invalidates-session baseline check (request_unauthenticated) to
+    call. Defaults to "not public" (raises, like a plain object() would)
+    so every pre-existing test that doesn't care about this baseline check
+    keeps falling through to run_scenario exactly as before."""
+
+    def __init__(self, baseline_status: int | None = None):
+        self.baseline_status = baseline_status
+
+    async def request_unauthenticated(self, method, url, **kwargs):
+        if self.baseline_status is None:
+            raise AttributeError("request_unauthenticated not configured for this test")
+        return MagicMock(status_code=self.baseline_status)
+
+
 class _FakeSessionPair:
     """Captures the DynamicScanConfig it was constructed with so tests can
     assert on it, and behaves as an async context manager like the real one."""
 
     last_config = None
+    baseline_status = None  # class-level knob tests can set before calling _run_dynamic_scan
 
     def __init__(self, config):
         _FakeSessionPair.last_config = config
-        self.primary = object()
+        self.primary = _FakePrimarySession(_FakeSessionPair.baseline_status)
 
     async def __aenter__(self):
         return self
@@ -225,6 +242,93 @@ class TestLogoutScenarioGating:
         logout_finding = next(f for f in findings if f["rule_id"] == "LOGOUT_INVALIDATES_SESSION")
         assert logout_finding["verdict"] == "pass"
 
+    @pytest.mark.asyncio
+    async def test_publicly_reachable_target_skips_scenario_as_not_tested(self):
+        # target_url is very often a bare origin root — a public SPA shell
+        # or a public service-info/health endpoint — never actually gated
+        # by the session. Running the post-logout assertion against it
+        # produces a misleading FAIL (it's reachable after logout because
+        # it's *always* reachable). Confirmed false positive against a real
+        # scan. A baseline unauthenticated request establishes this and
+        # skips the scenario instead of running it.
+        svc, db = await _make_service()
+        run_scenario_mock = AsyncMock()
+        await db.scans.insert_one({"scan_id": "scan-6b", "state": "PENDING"})
+        _FakeSessionPair.baseline_status = 200
+        try:
+            with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+                 patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+                 patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])), \
+                 patch("app.domain.analysis.dast.logout_discovery.discover_logout_url",
+                       AsyncMock(return_value=f"{TARGET}/logout")), \
+                 patch("app.domain.analysis.dast.scenario_runner.run_scenario", run_scenario_mock):
+                await svc._run_dynamic_scan(
+                    "scan-6b", TARGET, dynamic_auth_mode="bearer", dynamic_bearer_token="tok",
+                )
+        finally:
+            _FakeSessionPair.baseline_status = None
+        run_scenario_mock.assert_not_called()
+        doc = await db.scans.find_one({"scan_id": "scan-6b"})
+        findings = doc["summary"]["dynamic_findings"]
+        logout_finding = next(f for f in findings if f["rule_id"] == "LOGOUT_INVALIDATES_SESSION")
+        assert logout_finding["verdict"] == "not_tested"
+        assert "publicly reachable" in logout_finding["note"]
+
+    @pytest.mark.asyncio
+    async def test_protected_target_still_runs_the_scenario(self):
+        # The baseline unauthenticated request comes back gated (403) —
+        # target_url IS a protected resource, so the scenario should run
+        # exactly as before this fix.
+        svc, db = await _make_service()
+        scenario_finding = DynamicFinding(
+            control_id="V7.4.1", verdict=Verdict.PASS, rule_id="LOGOUT_INVALIDATES_SESSION",
+            url=TARGET, method="GET", note="ok", severity="high",
+        )
+        run_scenario_mock = AsyncMock(return_value=scenario_finding)
+        await db.scans.insert_one({"scan_id": "scan-6c", "state": "PENDING"})
+        _FakeSessionPair.baseline_status = 403
+        try:
+            with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+                 patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+                 patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])), \
+                 patch("app.domain.analysis.dast.logout_discovery.discover_logout_url",
+                       AsyncMock(return_value=f"{TARGET}/logout")), \
+                 patch("app.domain.analysis.dast.scenario_runner.run_scenario", run_scenario_mock):
+                await svc._run_dynamic_scan(
+                    "scan-6c", TARGET, dynamic_auth_mode="bearer", dynamic_bearer_token="tok",
+                )
+        finally:
+            _FakeSessionPair.baseline_status = None
+        run_scenario_mock.assert_called_once()
+        doc = await db.scans.find_one({"scan_id": "scan-6c"})
+        findings = doc["summary"]["dynamic_findings"]
+        logout_finding = next(f for f in findings if f["rule_id"] == "LOGOUT_INVALIDATES_SESSION")
+        assert logout_finding["verdict"] == "pass"
+
+    @pytest.mark.asyncio
+    async def test_baseline_check_failure_falls_back_to_running_the_scenario(self):
+        # If the baseline request itself errors out (network hiccup, etc.),
+        # this must not silently drop the check — fall back to running the
+        # scenario exactly as before this fix existed.
+        svc, db = await _make_service()
+        scenario_finding = DynamicFinding(
+            control_id="V7.4.1", verdict=Verdict.PASS, rule_id="LOGOUT_INVALIDATES_SESSION",
+            url=TARGET, method="GET", note="ok", severity="high",
+        )
+        run_scenario_mock = AsyncMock(return_value=scenario_finding)
+        await db.scans.insert_one({"scan_id": "scan-6d", "state": "PENDING"})
+        _FakeSessionPair.baseline_status = None  # _FakePrimarySession raises AttributeError
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url",
+                   AsyncMock(return_value=f"{TARGET}/logout")), \
+             patch("app.domain.analysis.dast.scenario_runner.run_scenario", run_scenario_mock):
+            await svc._run_dynamic_scan(
+                "scan-6d", TARGET, dynamic_auth_mode="bearer", dynamic_bearer_token="tok",
+            )
+        run_scenario_mock.assert_called_once()
+
 
 class TestScanDocRecordsAuthMode:
     @pytest.mark.asyncio
@@ -301,6 +405,53 @@ class TestCrawlerWiring:
 
         called_urls = run_checks_mock.call_args.args[1]
         assert called_urls == [TARGET]
+
+
+class TestDynamicProbeWiring:
+    """A pure scan_type="dynamic" run's whole point is testing a live
+    target_url — DynamicProbe (the TLS/HTTPS/cert/HSTS/.git-exposure live
+    checks backing the catalog's 8 dynamic_probe-labeled ASVS controls) must
+    run for it, not only for the hybrid (repo + target_url) path. Regression
+    coverage for the gap where dynamic_probe_findings was never populated
+    for scan_type="dynamic", leaving those controls permanently not_tested
+    for exactly the scan type they matter most for."""
+
+    @pytest.mark.asyncio
+    async def test_probe_findings_reach_scan_summary(self):
+        svc, db = await _make_service()
+        from app.domain.analysis.dynamic_probe import ProbeFinding
+
+        probe_results = [
+            ProbeFinding(control_id="V12.1.1", verdict="pass", note="TLS 1.3", confidence=0.85),
+            ProbeFinding(control_id="V13.4.1", verdict="fail", note=".git exposed", confidence=0.9),
+        ]
+        await db.scans.insert_one({"scan_id": "scan-probe-1", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.services.scan_service.DynamicProbe") as mock_probe_cls:
+            mock_probe_cls.return_value.probe = AsyncMock(return_value=probe_results)
+            await svc._run_dynamic_scan("scan-probe-1", TARGET)
+
+        doc = await db.scans.find_one({"scan_id": "scan-probe-1"})
+        findings = doc["summary"]["dynamic_probe_findings"]
+        assert len(findings) == 2
+        assert {f["control_id"] for f in findings} == {"V12.1.1", "V13.4.1"}
+
+    @pytest.mark.asyncio
+    async def test_probe_failure_does_not_abort_scan(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-probe-2", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.services.scan_service.DynamicProbe") as mock_probe_cls:
+            mock_probe_cls.return_value.probe = AsyncMock(side_effect=RuntimeError("boom"))
+            await svc._run_dynamic_scan("scan-probe-2", TARGET)
+
+        doc = await db.scans.find_one({"scan_id": "scan-probe-2"})
+        assert doc["state"] == "COMPLETED"
+        assert doc["summary"]["dynamic_probe_findings"] == []
 
 
 class TestUserSuppliedScenarios:
@@ -510,6 +661,351 @@ class TestIdorProbeWiring:
              patch("app.domain.analysis.dast.idor_probe.run_idor_probe", run_idor_probe_mock):
             await svc._run_dynamic_scan("scan-19", TARGET)
         run_idor_probe_mock.assert_not_called()
+
+
+class TestMassAssignmentProbeWiring:
+    @pytest.mark.asyncio
+    async def test_mass_assignment_probe_is_built_and_run(self):
+        svc, db = await _make_service()
+        mass_assignment_finding = DynamicFinding(
+            control_id="V15.3.3", verdict=Verdict.CONFIRMED, rule_id="MASS_ASSIGN_PROFILE",
+            url=f"{TARGET}/profile", method="PATCH", note="role took", severity="high",
+        )
+        run_mass_assignment_probe_mock = AsyncMock(return_value=mass_assignment_finding)
+        await db.scans.insert_one({"scan_id": "scan-20", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch(
+                 "app.domain.analysis.dast.mass_assignment_probe.run_mass_assignment_probe",
+                 run_mass_assignment_probe_mock,
+             ):
+            await svc._run_dynamic_scan(
+                "scan-20", TARGET,
+                dynamic_active_mode=True,
+                dynamic_mass_assignment_probes=[{
+                    "scenario_id": "MASS_ASSIGN_PROFILE", "update_url": f"{TARGET}/profile",
+                }],
+            )
+
+        run_mass_assignment_probe_mock.assert_called_once()
+        called_config = run_mass_assignment_probe_mock.call_args.args[1]
+        assert called_config.scenario_id == "MASS_ASSIGN_PROFILE"
+        assert called_config.update_url == f"{TARGET}/profile"
+
+        doc = await db.scans.find_one({"scan_id": "scan-20"})
+        findings = doc["summary"]["dynamic_findings"]
+        result = next(f for f in findings if f["rule_id"] == "MASS_ASSIGN_PROFILE")
+        assert result["verdict"] == "confirmed"
+
+    @pytest.mark.asyncio
+    async def test_broken_mass_assignment_probe_config_does_not_abort_scan(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-21", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            # Missing required "update_url" — MassAssignmentProbeConfig(**data) raises TypeError.
+            await svc._run_dynamic_scan(
+                "scan-21", TARGET, dynamic_mass_assignment_probes=[{"scenario_id": "BROKEN"}],
+            )
+        doc = await db.scans.find_one({"scan_id": "scan-21"})
+        assert doc["state"] == "COMPLETED"
+
+    @pytest.mark.asyncio
+    async def test_no_mass_assignment_probes_supplied_is_a_no_op(self):
+        svc, db = await _make_service()
+        run_mass_assignment_probe_mock = AsyncMock()
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch(
+                 "app.domain.analysis.dast.mass_assignment_probe.run_mass_assignment_probe",
+                 run_mass_assignment_probe_mock,
+             ):
+            await svc._run_dynamic_scan("scan-22", TARGET)
+        run_mass_assignment_probe_mock.assert_not_called()
+
+
+class TestTimingComparisonProbeWiring:
+    """V11.2.5 — the dedicated dynamic_timing_probes request shape, same
+    build-config-then-run-then-record wiring as race/IDOR/mass-assignment
+    probes above, but with variant_a/variant_b needing conversion from
+    plain dicts (API shape) to TimingProbeVariant (domain shape) first."""
+
+    @pytest.mark.asyncio
+    async def test_timing_probe_is_built_and_run(self):
+        svc, db = await _make_service()
+        timing_finding = DynamicFinding(
+            control_id="V11.2.5", verdict=Verdict.FAIL, rule_id="PADDING_ORACLE_CHECK",
+            url=f"{TARGET}/decrypt", method="POST", note="timing-distinguishable", severity="medium",
+        )
+        run_timing_probe_mock = AsyncMock(return_value=timing_finding)
+        await db.scans.insert_one({"scan_id": "scan-30", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch(
+                 "app.domain.analysis.dast.padding_oracle_probe.run_timing_comparison_probe",
+                 run_timing_probe_mock,
+             ):
+            await svc._run_dynamic_scan(
+                "scan-30", TARGET,
+                dynamic_active_mode=True,
+                dynamic_timing_probes=[{
+                    "scenario_id": "PADDING_ORACLE_CHECK", "url": f"{TARGET}/decrypt",
+                    "variant_a": {"data": {"ciphertext": "valid-padding-wrong-content"}},
+                    "variant_b": {"data": {"ciphertext": "invalid-padding"}},
+                }],
+            )
+
+        run_timing_probe_mock.assert_called_once()
+        called_config = run_timing_probe_mock.call_args.args[1]
+        assert called_config.scenario_id == "PADDING_ORACLE_CHECK"
+        assert called_config.variant_a.data == {"ciphertext": "valid-padding-wrong-content"}
+        assert called_config.variant_b.data == {"ciphertext": "invalid-padding"}
+
+        doc = await db.scans.find_one({"scan_id": "scan-30"})
+        findings = doc["summary"]["dynamic_findings"]
+        result = next(f for f in findings if f["rule_id"] == "PADDING_ORACLE_CHECK")
+        assert result["verdict"] == "fail"
+
+    @pytest.mark.asyncio
+    async def test_broken_timing_probe_config_does_not_abort_scan(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-31", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            # Missing required "variant_a"/"variant_b" keys -> KeyError building the config.
+            await svc._run_dynamic_scan(
+                "scan-31", TARGET, dynamic_timing_probes=[{"scenario_id": "BROKEN", "url": f"{TARGET}/x"}],
+            )
+        doc = await db.scans.find_one({"scan_id": "scan-31"})
+        assert doc["state"] == "COMPLETED"
+
+    @pytest.mark.asyncio
+    async def test_no_timing_probes_supplied_is_a_no_op(self):
+        svc, db = await _make_service()
+        run_timing_probe_mock = AsyncMock()
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch(
+                 "app.domain.analysis.dast.padding_oracle_probe.run_timing_comparison_probe",
+                 run_timing_probe_mock,
+             ):
+            await svc._run_dynamic_scan("scan-32", TARGET)
+        run_timing_probe_mock.assert_not_called()
+
+
+class TestSignalingFuzzProbeWiring:
+    """V17.3.2 — dynamic_signaling_fuzz_probes wiring. Doesn't route through
+    DastSessionPair (websocket_fuzz_probe.py drives `websockets` directly),
+    so only run_websocket_fuzz_probe itself needs mocking here — no _pair
+    fixture involved."""
+
+    @pytest.mark.asyncio
+    async def test_signaling_probe_is_built_and_run(self):
+        svc, db = await _make_service()
+        signaling_finding = DynamicFinding(
+            control_id="V17.3.2", verdict=Verdict.FAIL, rule_id="SIGNALING_FUZZ",
+            url="wss://target.example/signaling", method="WEBSOCKET",
+            note="handshake failed after payload #2", severity="high",
+        )
+        run_signaling_probe_mock = AsyncMock(return_value=signaling_finding)
+        await db.scans.insert_one({"scan_id": "scan-40", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch(
+                 "app.domain.analysis.dast.websocket_fuzz_probe.run_websocket_fuzz_probe",
+                 run_signaling_probe_mock,
+             ):
+            await svc._run_dynamic_scan(
+                "scan-40", TARGET,
+                dynamic_active_mode=True,
+                dynamic_signaling_fuzz_probes=[{
+                    "scenario_id": "SIGNALING_FUZZ", "url": "wss://target.example/signaling",
+                    "payloads": ["not json", '{"type": null}'],
+                }],
+            )
+
+        run_signaling_probe_mock.assert_called_once()
+        called_config = run_signaling_probe_mock.call_args.args[0]
+        assert called_config.scenario_id == "SIGNALING_FUZZ"
+        assert called_config.payloads == ["not json", '{"type": null}']
+
+        doc = await db.scans.find_one({"scan_id": "scan-40"})
+        findings = doc["summary"]["dynamic_findings"]
+        result = next(f for f in findings if f["rule_id"] == "SIGNALING_FUZZ")
+        assert result["verdict"] == "fail"
+
+    @pytest.mark.asyncio
+    async def test_omitted_payloads_uses_the_default_corpus(self):
+        svc, db = await _make_service()
+        run_signaling_probe_mock = AsyncMock(return_value=DynamicFinding(
+            control_id="V17.3.2", verdict=Verdict.PASS, rule_id="SIGNALING_FUZZ",
+            url="wss://target.example/signaling", method="WEBSOCKET", note="ok", severity="high",
+        ))
+        await db.scans.insert_one({"scan_id": "scan-41", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch(
+                 "app.domain.analysis.dast.websocket_fuzz_probe.run_websocket_fuzz_probe",
+                 run_signaling_probe_mock,
+             ):
+            await svc._run_dynamic_scan(
+                "scan-41", TARGET,
+                dynamic_active_mode=True,
+                # "payloads" omitted entirely (matches the API default of None).
+                dynamic_signaling_fuzz_probes=[{
+                    "scenario_id": "SIGNALING_FUZZ", "url": "wss://target.example/signaling",
+                }],
+            )
+
+        called_config = run_signaling_probe_mock.call_args.args[0]
+        assert len(called_config.payloads) > 5  # the built-in default corpus, not empty
+
+    @pytest.mark.asyncio
+    async def test_broken_signaling_probe_config_does_not_abort_scan(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-42", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            # Missing required "scenario_id" -> TypeError building the config.
+            await svc._run_dynamic_scan(
+                "scan-42", TARGET, dynamic_signaling_fuzz_probes=[{"url": "wss://target.example/x"}],
+            )
+        doc = await db.scans.find_one({"scan_id": "scan-42"})
+        assert doc["state"] == "COMPLETED"
+
+    @pytest.mark.asyncio
+    async def test_no_signaling_probes_supplied_is_a_no_op(self):
+        svc, db = await _make_service()
+        run_signaling_probe_mock = AsyncMock()
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch(
+                 "app.domain.analysis.dast.websocket_fuzz_probe.run_websocket_fuzz_probe",
+                 run_signaling_probe_mock,
+             ):
+            await svc._run_dynamic_scan("scan-43", TARGET)
+        run_signaling_probe_mock.assert_not_called()
+
+
+class TestWebRtcProbeWiring:
+    """V17.2.3/V17.2.4/V17.2.5 — confirms the dict-to-dataclass conversion
+    (nested WebRtcConnectionConfig objects, hex-decoded payloads) each loop
+    does before calling its probe function. The probes themselves (real
+    aiortc peer connections) are covered by test_dast_webrtc_probe.py; here
+    only the mock's call_args need inspecting."""
+
+    @pytest.mark.asyncio
+    async def test_media_flood_probe_is_built_and_run(self):
+        svc, db = await _make_service()
+        flood_finding = DynamicFinding(
+            control_id="V17.2.5", verdict=Verdict.PASS, rule_id="MEDIA_FLOOD",
+            url="", method="WEBRTC", note="ok", severity="high",
+        )
+        run_flood_mock = AsyncMock(return_value=flood_finding)
+        await db.scans.insert_one({"scan_id": "scan-50", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.webrtc_probe.run_media_flood_probe", run_flood_mock):
+            await svc._run_dynamic_scan(
+                "scan-50", TARGET,
+                dynamic_active_mode=True,
+                dynamic_media_flood_probes=[{
+                    "scenario_id": "MEDIA_FLOOD",
+                    "control_connection": {"signaling_url": "https://target.example/whip/control"},
+                    "flood_connections": [
+                        {"signaling_url": "https://target.example/whip/flood1"},
+                        {"signaling_url": "https://target.example/whip/flood2"},
+                    ],
+                }],
+            )
+
+        run_flood_mock.assert_called_once()
+        called_config = run_flood_mock.call_args.args[0]
+        assert called_config.control_connection.signaling_url == "https://target.example/whip/control"
+        assert len(called_config.flood_connections) == 2
+
+        doc = await db.scans.find_one({"scan_id": "scan-50"})
+        result = next(f for f in doc["summary"]["dynamic_findings"] if f["rule_id"] == "MEDIA_FLOOD")
+        assert result["verdict"] == "pass"
+
+    @pytest.mark.asyncio
+    async def test_malformed_packet_probe_decodes_hex_payloads(self):
+        svc, db = await _make_service()
+        run_malformed_mock = AsyncMock(return_value=DynamicFinding(
+            control_id="V17.2.4", verdict=Verdict.FAIL, rule_id="RTP_FUZZ",
+            url="", method="WEBRTC", note="crashed", severity="critical",
+        ))
+        await db.scans.insert_one({"scan_id": "scan-51", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.webrtc_probe.run_malformed_packet_probe", run_malformed_mock):
+            await svc._run_dynamic_scan(
+                "scan-51", TARGET,
+                dynamic_active_mode=True,
+                dynamic_malformed_packet_probes=[{
+                    "scenario_id": "RTP_FUZZ",
+                    "connection": {"signaling_url": "https://target.example/whip"},
+                    "payloads": ["ff00", "deadbeef"],
+                }],
+            )
+
+        called_config = run_malformed_mock.call_args.args[0]
+        assert called_config.payloads == [b"\xff\x00", b"\xde\xad\xbe\xef"]
+
+    @pytest.mark.asyncio
+    async def test_srtp_auth_probe_is_built_and_run(self):
+        svc, db = await _make_service()
+        run_srtp_mock = AsyncMock(return_value=DynamicFinding(
+            control_id="V17.2.3", verdict=Verdict.NOT_TESTED, rule_id="SRTP_AUTH_CHECK",
+            url="", method="WEBRTC", note="no relay observed", severity="high",
+        ))
+        await db.scans.insert_one({"scan_id": "scan-52", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.webrtc_probe.run_srtp_auth_enforcement_probe", run_srtp_mock):
+            await svc._run_dynamic_scan(
+                "scan-52", TARGET,
+                dynamic_active_mode=True,
+                dynamic_srtp_auth_probes=[{
+                    "scenario_id": "SRTP_AUTH_CHECK",
+                    "attacker_connection": {"signaling_url": "https://target.example/whip/a"},
+                    "observer_connection": {"signaling_url": "https://target.example/whip/b"},
+                }],
+            )
+
+        run_srtp_mock.assert_called_once()
+        called_config = run_srtp_mock.call_args.args[0]
+        assert called_config.attacker_connection.signaling_url == "https://target.example/whip/a"
+        assert called_config.observer_connection.signaling_url == "https://target.example/whip/b"
+
+    @pytest.mark.asyncio
+    async def test_broken_webrtc_probe_configs_do_not_abort_scan(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-53", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            await svc._run_dynamic_scan(
+                "scan-53", TARGET,
+                dynamic_media_flood_probes=[{"scenario_id": "BROKEN"}],  # missing required keys
+                dynamic_malformed_packet_probes=[{"scenario_id": "BROKEN"}],
+                dynamic_srtp_auth_probes=[{"scenario_id": "BROKEN"}],
+            )
+        doc = await db.scans.find_one({"scan_id": "scan-53"})
+        assert doc["state"] == "COMPLETED"
 
 
 class TestStoredXssProbeWiring:
@@ -882,3 +1378,306 @@ class TestSsrfProbeWiring:
         )
         assert bridge_result["verdict"] == "fail"
         assert bridge_result["evidence"] == "bridge:vuln-1:app.py:9"
+
+
+class TestSsrfCollaboratorLoopbackWarning:
+    """The SSRF collaborator's default listener only binds loopback — it
+    can't catch an OOB callback from a real external target, only one on
+    the same host/network as the scanner. That limitation used to only live
+    in the field's schema description; it's now also a scan-log line so a
+    user reading scan output (not the API docs) sees it."""
+
+    @pytest.mark.asyncio
+    async def test_warning_logged_when_no_collaborator_host_supplied(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-36", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            await svc._run_dynamic_scan("scan-36", TARGET, dynamic_active_mode=True)
+
+        doc = await db.scans.find_one({"scan_id": "scan-36"})
+        assert any("loopback listener" in line for line in doc.get("logs", []))
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_collaborator_host_supplied(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-37", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            await svc._run_dynamic_scan(
+                "scan-37", TARGET, dynamic_active_mode=True,
+                dynamic_ssrf_collaborator_host="collab.example.com",
+            )
+
+        doc = await db.scans.find_one({"scan_id": "scan-37"})
+        assert not any("loopback listener" in line for line in doc.get("logs", []))
+
+    @pytest.mark.asyncio
+    async def test_no_warning_without_active_mode(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-38", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult())), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)):
+            await svc._run_dynamic_scan("scan-38", TARGET)  # dynamic_active_mode defaults False
+
+        doc = await db.scans.find_one({"scan_id": "scan-38"})
+        assert not any("loopback listener" in line for line in doc.get("logs", []))
+
+
+class TestMultiTargetDynamicScan:
+    """dynamic_additional_target_urls (the fix for a microservice app
+    fragmenting into unrelated 'Direct Code' scans, one per service) —
+    _run_dynamic_scan/_run_repository_scan should sweep every target within
+    ONE scan document, merging findings rather than needing a separate
+    ScanStart per origin. Mocks _run_dynamic_checks itself (the whole
+    per-target sweep) rather than its internals — this tests the loop/merge
+    glue, not the DAST engine, same spirit as the rest of this file."""
+
+    @pytest.mark.asyncio
+    async def test_run_dynamic_checks_called_once_per_target_in_order(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-multi-1", "state": "PENDING"})
+
+        seen_targets = []
+
+        async def fake_run_dynamic_checks(self, *, scan_id, target_url, **kwargs):
+            seen_targets.append(target_url)
+            return ([{"control_id": f"C-{target_url}", "verdict": "fail", "severity": "high"}], [])
+
+        with patch.object(ScanService, "_run_dynamic_checks", fake_run_dynamic_checks), \
+             patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])):
+            await svc._run_dynamic_scan(
+                "scan-multi-1", TARGET,
+                dynamic_additional_target_urls=[f"{TARGET}:8081", f"{TARGET}:8082"],
+            )
+
+        assert seen_targets == [TARGET, f"{TARGET}:8081", f"{TARGET}:8082"]
+
+    @pytest.mark.asyncio
+    async def test_findings_from_every_target_merged_into_one_scan_document(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-multi-2", "state": "PENDING"})
+
+        async def fake_run_dynamic_checks(self, *, scan_id, target_url, **kwargs):
+            return ([{"control_id": f"C-{target_url}", "verdict": "fail", "severity": "high"}], [])
+
+        with patch.object(ScanService, "_run_dynamic_checks", fake_run_dynamic_checks), \
+             patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])):
+            await svc._run_dynamic_scan(
+                "scan-multi-2", TARGET,
+                dynamic_additional_target_urls=[f"{TARGET}:8081", f"{TARGET}:8082"],
+            )
+
+        doc = await db.scans.find_one({"scan_id": "scan-multi-2"})
+        assert doc["state"] == "COMPLETED"
+        findings = doc["summary"]["dynamic_findings"]
+        assert len(findings) == 3
+        assert {f["control_id"] for f in findings} == {
+            f"C-{TARGET}", f"C-{TARGET}:8081", f"C-{TARGET}:8082",
+        }
+        # 3 fails across 3 targets, each "high" — by_severity must reflect
+        # every target's contribution, not just the first one's.
+        assert doc["summary"]["by_severity"]["high"] == 3
+
+    @pytest.mark.asyncio
+    async def test_one_target_failing_does_not_discard_the_others(self):
+        """Regression — before this loop existed, an unhandled exception
+        from a single target's sweep propagated to the outer try/except and
+        marked the WHOLE scan FAILED with 0 results, even when other
+        targets had already produced real findings."""
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-multi-3", "state": "PENDING"})
+
+        async def fake_run_dynamic_checks(self, *, scan_id, target_url, **kwargs):
+            if target_url.endswith(":8081"):
+                raise ConnectionError()  # empty message, same shape as the real blank-reason bug
+            return ([{"control_id": f"C-{target_url}", "verdict": "fail", "severity": "medium"}], [])
+
+        with patch.object(ScanService, "_run_dynamic_checks", fake_run_dynamic_checks), \
+             patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])):
+            await svc._run_dynamic_scan(
+                "scan-multi-3", TARGET,
+                dynamic_additional_target_urls=[f"{TARGET}:8081", f"{TARGET}:8082"],
+            )
+
+        doc = await db.scans.find_one({"scan_id": "scan-multi-3"})
+        assert doc["state"] == "COMPLETED"
+        findings = doc["summary"]["dynamic_findings"]
+        assert {f["control_id"] for f in findings} == {f"C-{TARGET}", f"C-{TARGET}:8082"}
+        # The failing target's blank-message exception still surfaces a
+        # diagnosable reason in the logs, not a silent "Reason: ".
+        assert any(
+            f"Dynamic checks failed for {TARGET}:8081" in line and "ConnectionError" in line
+            for line in doc.get("logs", [])
+        )
+
+    @pytest.mark.asyncio
+    async def test_single_target_unchanged_behavior(self):
+        """No dynamic_additional_target_urls at all — the pre-existing
+        single-target call shape still works exactly as before."""
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-multi-4", "state": "PENDING"})
+
+        async def fake_run_dynamic_checks(self, *, scan_id, target_url, **kwargs):
+            assert target_url == TARGET
+            return ([{"control_id": "C-only", "verdict": "pass", "severity": "low"}], [])
+
+        with patch.object(ScanService, "_run_dynamic_checks", fake_run_dynamic_checks), \
+             patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])):
+            await svc._run_dynamic_scan("scan-multi-4", TARGET)
+
+        doc = await db.scans.find_one({"scan_id": "scan-multi-4"})
+        assert len(doc["summary"]["dynamic_findings"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_user_supplied_probes_attached_to_primary_target_only(self):
+        """Regression — a user-supplied idor/race/mass-assignment probe
+        carries its own absolute URL, independent of which target a given
+        loop iteration is sweeping. Attaching it to every target (instead
+        of only the first/primary one) used to run the identical probe
+        once per target — worse for a race probe, where 'fire N concurrent
+        requests' became N x that many real requests against the target."""
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-multi-5", "state": "PENDING"})
+
+        received_idor_probes = []
+
+        async def fake_run_dynamic_checks(self, *, scan_id, target_url, dynamic_idor_probes=None, **kwargs):
+            received_idor_probes.append(dynamic_idor_probes)
+            return ([], [])
+
+        idor_probes = [{"scenario_id": "idor-1", "owner_resource_url": f"{TARGET}/orders/1", "method": "GET"}]
+        with patch.object(ScanService, "_run_dynamic_checks", fake_run_dynamic_checks), \
+             patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])):
+            await svc._run_dynamic_scan(
+                "scan-multi-5", TARGET,
+                dynamic_additional_target_urls=[f"{TARGET}:8081", f"{TARGET}:8082"],
+                dynamic_idor_probes=idor_probes,
+            )
+
+        assert received_idor_probes == [idor_probes, None, None]
+
+
+class _FakePreAuthSession:
+    """Stands in for DastSession inside _resolve_shared_multi_target_auth's
+    one-time pre-authentication — __aenter__ is where the real class would
+    perform the actual login, so this just returns an object whose
+    browser_auth_state() reports whatever the test wants the 'completed
+    login' to have produced."""
+
+    auth_state = ([], {"Authorization": "Bearer shared-token-xyz"})
+
+    def __init__(self, actor):
+        self.actor = actor
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    def browser_auth_state(self):
+        return self.__class__.auth_state
+
+
+class TestSharedMultiTargetAuth:
+    """_resolve_shared_multi_target_auth — form_login re-authenticating
+    fresh on every target of a multi-target sweep can trip a shared login
+    endpoint's own rate limiter (confirmed against a live app: target 1
+    succeeds, targets 2+ get 429 Too Many Requests). Pre-authenticating
+    once and reusing the resulting bearer token avoids the repeated
+    logins entirely when the target extracts a JSON bearer token."""
+
+    @pytest.mark.asyncio
+    async def test_form_login_reused_as_bearer_across_all_targets(self):
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-shared-1", "state": "PENDING"})
+
+        received = []
+
+        async def fake_run_dynamic_checks(
+            self, *, scan_id, target_url, dynamic_auth_mode, dynamic_bearer_token, dynamic_form_login, **kwargs
+        ):
+            received.append((dynamic_auth_mode, dynamic_bearer_token, dynamic_form_login))
+            return ([], [])
+
+        form = {
+            "login_url": f"{TARGET}/login", "username_field": "email", "password_field": "password",
+            "username": "a@b.com", "password": "hunter2",
+        }
+        _FakePreAuthSession.auth_state = ([], {"Authorization": "Bearer shared-token-xyz"})
+        with patch.object(ScanService, "_run_dynamic_checks", fake_run_dynamic_checks), \
+             patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.session.DastSession", _FakePreAuthSession):
+            await svc._run_dynamic_scan(
+                "scan-shared-1", TARGET,
+                dynamic_additional_target_urls=[f"{TARGET}:8081", f"{TARGET}:8082"],
+                dynamic_auth_mode="form_login", dynamic_form_login=form,
+            )
+
+        # All 3 targets get the SAME bearer token instead of each
+        # re-running form_login (which would show up as auth_mode staying
+        # "form_login" 3 times here, one real login attempt per target).
+        assert received == [("bearer", "shared-token-xyz", None)] * 3
+
+    @pytest.mark.asyncio
+    async def test_single_target_scan_unaffected_by_shared_auth_logic(self):
+        """No dynamic_additional_target_urls at all — pre-authentication
+        never runs (target_count == 1 guard), so a single-target scan's
+        form_login behaves exactly as it did before this feature existed."""
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-shared-2", "state": "PENDING"})
+
+        received = []
+
+        async def fake_run_dynamic_checks(self, *, scan_id, target_url, dynamic_auth_mode, **kwargs):
+            received.append(dynamic_auth_mode)
+            return ([], [])
+
+        form = {
+            "login_url": f"{TARGET}/login", "username_field": "email", "password_field": "password",
+            "username": "a@b.com", "password": "hunter2",
+        }
+        with patch.object(ScanService, "_run_dynamic_checks", fake_run_dynamic_checks), \
+             patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.session.DastSession", _FakePreAuthSession):
+            await svc._run_dynamic_scan("scan-shared-2", TARGET, dynamic_auth_mode="form_login", dynamic_form_login=form)
+
+        assert received == ["form_login"]
+
+    @pytest.mark.asyncio
+    async def test_cookie_only_login_falls_back_to_per_target_form_login(self):
+        """No Authorization header in the completed login's state (a pure
+        cookie-session target) — nothing to share across origins, so every
+        target keeps its own fresh form_login, unchanged from before this
+        feature existed."""
+        svc, db = await _make_service()
+        await db.scans.insert_one({"scan_id": "scan-shared-3", "state": "PENDING"})
+
+        received = []
+
+        async def fake_run_dynamic_checks(self, *, scan_id, target_url, dynamic_auth_mode, **kwargs):
+            received.append(dynamic_auth_mode)
+            return ([], [])
+
+        form = {
+            "login_url": f"{TARGET}/login", "username_field": "user", "password_field": "pass",
+            "username": "alice", "password": "hunter2",
+        }
+        _FakePreAuthSession.auth_state = ([{"name": "session", "value": "abc123", "domain": "example.com", "path": "/"}], {})
+        with patch.object(ScanService, "_run_dynamic_checks", fake_run_dynamic_checks), \
+             patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.session.DastSession", _FakePreAuthSession):
+            await svc._run_dynamic_scan(
+                "scan-shared-3", TARGET,
+                dynamic_additional_target_urls=[f"{TARGET}:8081"],
+                dynamic_auth_mode="form_login", dynamic_form_login=form,
+            )
+
+        assert received == ["form_login", "form_login"]

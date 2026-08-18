@@ -99,13 +99,18 @@ async def run_stored_xss_probe(
             note=f"Form submission failed: {session.redact(str(exc))}", confidence=0.2,
         )
 
+    submit_proof = {
+        "form_fields_submitted": list(submit_data.keys()),
+        "submission_status": submit_resp.status_code,
+        "submission_response_snippet": session.redact(submit_resp.text[:500]),
+    }
     if payload in submit_resp.text:
         return DynamicFinding(
             control_id=control_id, verdict=Verdict.FAIL, rule_id="STORED_XSS_PROBE",
             url=form.action_url, method=form.method, severity=severity,
             note=f"Submission marker came back unescaped in the submission response itself — "
                  f"reflected, unsanitized HTML output (marker: {marker})",
-            confidence=0.7,
+            confidence=0.7, payload=session.redact(payload), evidence_type="reflection", proof=submit_proof,
         )
 
     checked = 0
@@ -121,7 +126,11 @@ async def run_stored_xss_probe(
                 url=check_url, method="GET", severity=severity,
                 note=f"Submission marker came back unescaped on a different page ({check_url}) — "
                      f"stored, unsanitized HTML output (marker: {marker}, submitted via {form.action_url})",
-                confidence=0.75,
+                confidence=0.75, payload=session.redact(payload), evidence_type="reflection",
+                proof={
+                    "found_on_page": check_url, "status": resp.status_code,
+                    "response_snippet": session.redact(resp.text[:500]), "submitted_via": form.action_url,
+                },
             )
 
     if checked == 0:
@@ -130,7 +139,7 @@ async def run_stored_xss_probe(
             url=form.action_url, method=form.method, severity=severity,
             note="Form was submitted but no other page could be re-fetched to check for stored "
                  "reflection of the marker",
-            confidence=0.3,
+            confidence=0.3, evidence_type="reflection", proof=submit_proof,
         )
 
     return DynamicFinding(
@@ -138,5 +147,6 @@ async def run_stored_xss_probe(
         url=form.action_url, method=form.method, severity=severity,
         note=f"Marker was not found unescaped in the submission response or any of {checked} "
              f"re-checked page(s)",
-        confidence=0.5,
+        confidence=0.5, evidence_type="reflection",
+        proof={**submit_proof, "pages_rechecked": checked},
     )

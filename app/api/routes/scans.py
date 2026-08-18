@@ -5,7 +5,10 @@ from app.api.deps import get_current_user
 from app.db.mongo import get_mongo_db
 from app.api.deps import get_db
 from app.enums.role import UserRole
-from app.schemas.scan import ScanStart, ScanResponse, ScanStatusRead, ScanSummary
+from app.schemas.scan import (
+    ScanStart, ScanResponse, ScanStatusRead, ScanSummary,
+    ProbeDiscoveryRequest, ProbeDiscoveryResponse, IdorCandidateRead, MassAssignmentCandidateRead,
+)
 from app.services.scan_service import ScanService
 from app.services.repository_service import RepositoryService
 from app.core.permissions import can_access_resource, check_scan_quota
@@ -14,7 +17,18 @@ from datetime import datetime, timezone
 from app.core.trace import trace_step
 from app.core.crypto import decrypt_secret
 from app.core.network import validate_public_git_url, validate_public_http_url
+from app.domain.analysis.dast.config import ActorConfig, AuthMode, DynamicScanConfig, FormLoginConfig, OAuth2Config
+from app.domain.analysis.dast.session import DastSessionPair
+from app.domain.analysis.dast.probe_discovery import discover_probe_candidates
 import asyncio
+import logging
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Optional
+from urllib.parse import urlsplit
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/scans", tags=["scans"])
@@ -32,7 +46,8 @@ async def scan_ws(
 
     Connect: ws://<host>/api/v1/scans/ws/<scan_id>?token=<jwt>
     Messages sent (JSON):
-      {type:"status", state, progress, eta}
+      {type:"status", state, progress, eta, current_file, files_scanned,
+              total_files, current_dynamic_action, dynamic_findings_count}
       {type:"logs",   lines:[...]}
       {type:"done",   state, summary?}
       {type:"error",  message}
@@ -87,6 +102,13 @@ async def scan_ws(
                 "state": state,
                 "progress": progress,
                 "eta": scan.get("eta", ""),
+                "current_file": scan.get("current_file"),
+                "files_scanned": scan.get("files_scanned", 0),
+                "total_files": scan.get("total_files", 0),
+                # Dynamic/DAST phase telemetry — see ScanStatusRead docstring
+                # in schemas/scan.py for why this exists alongside current_file.
+                "current_dynamic_action": scan.get("current_dynamic_action"),
+                "dynamic_findings_count": scan.get("dynamic_findings_count", 0),
             })
 
             logs     = scan.get("logs", [])
@@ -139,6 +161,8 @@ async def start_scan(
         await check_scan_quota(user, db)
         if payload.target_url:
             validate_public_http_url(payload.target_url, allow_http=True)
+        for extra_url in (payload.dynamic_additional_target_urls or []):
+            validate_public_http_url(extra_url, allow_http=True)
 
         service = ScanService(db)
         repo_url = None
@@ -168,9 +192,13 @@ async def start_scan(
             repo_token=repo_token,
             file_paths=payload.file_paths,
             target_url=payload.target_url,
+            dynamic_additional_target_urls=payload.dynamic_additional_target_urls,
             dynamic_auth_mode=payload.dynamic_auth_mode.value,
             dynamic_bearer_token=payload.dynamic_bearer_token,
             dynamic_form_login=payload.dynamic_form_login.model_dump() if payload.dynamic_form_login else None,
+            dynamic_oauth2=payload.dynamic_oauth2.model_dump() if payload.dynamic_oauth2 else None,
+            dynamic_api_key_header=payload.dynamic_api_key_header,
+            dynamic_api_key_value=payload.dynamic_api_key_value,
             dynamic_active_mode=payload.dynamic_active_mode,
             dynamic_second_actor_auth_mode=payload.dynamic_second_actor_auth_mode.value,
             dynamic_second_actor_bearer_token=payload.dynamic_second_actor_bearer_token,
@@ -178,6 +206,12 @@ async def start_scan(
                 payload.dynamic_second_actor_form_login.model_dump()
                 if payload.dynamic_second_actor_form_login else None
             ),
+            dynamic_second_actor_oauth2=(
+                payload.dynamic_second_actor_oauth2.model_dump()
+                if payload.dynamic_second_actor_oauth2 else None
+            ),
+            dynamic_second_actor_api_key_header=payload.dynamic_second_actor_api_key_header,
+            dynamic_second_actor_api_key_value=payload.dynamic_second_actor_api_key_value,
             dynamic_scenarios=(
                 [s.model_dump() for s in payload.dynamic_scenarios] if payload.dynamic_scenarios else None
             ),
@@ -187,14 +221,41 @@ async def start_scan(
             dynamic_idor_probes=(
                 [p.model_dump() for p in payload.dynamic_idor_probes] if payload.dynamic_idor_probes else None
             ),
+            dynamic_mass_assignment_probes=(
+                [p.model_dump() for p in payload.dynamic_mass_assignment_probes]
+                if payload.dynamic_mass_assignment_probes else None
+            ),
+            dynamic_timing_probes=(
+                [p.model_dump() for p in payload.dynamic_timing_probes]
+                if payload.dynamic_timing_probes else None
+            ),
+            dynamic_signaling_fuzz_probes=(
+                [p.model_dump() for p in payload.dynamic_signaling_fuzz_probes]
+                if payload.dynamic_signaling_fuzz_probes else None
+            ),
+            dynamic_media_flood_probes=(
+                [p.model_dump() for p in payload.dynamic_media_flood_probes]
+                if payload.dynamic_media_flood_probes else None
+            ),
+            dynamic_malformed_packet_probes=(
+                [p.model_dump() for p in payload.dynamic_malformed_packet_probes]
+                if payload.dynamic_malformed_packet_probes else None
+            ),
+            dynamic_srtp_auth_probes=(
+                [p.model_dump() for p in payload.dynamic_srtp_auth_probes]
+                if payload.dynamic_srtp_auth_probes else None
+            ),
             dynamic_crawl_max_pages=payload.dynamic_crawl_max_pages,
             dynamic_crawl_max_depth=payload.dynamic_crawl_max_depth,
+            dynamic_state_crawl_max_forms=payload.dynamic_state_crawl_max_forms,
+            dynamic_state_crawl_max_depth=payload.dynamic_state_crawl_max_depth,
             dynamic_rule_ids=payload.dynamic_rule_ids,
             dynamic_ssrf_collaborator_host=payload.dynamic_ssrf_collaborator_host,
             dynamic_ssrf_collaborator_port=payload.dynamic_ssrf_collaborator_port,
             dynamic_openapi_spec_url=payload.dynamic_openapi_spec_url,
             dynamic_openapi_spec=payload.dynamic_openapi_spec,
             dynamic_use_headless_browser=payload.dynamic_use_headless_browser,
+            enable_llm=payload.enable_llm,
         )
         
         return ScanResponse(
@@ -214,6 +275,119 @@ async def start_scan(
             status_code=500,
             detail=f"Failed to start scan: {str(e)}"
         )
+
+
+def _build_probe_discovery_actor(
+    auth_mode: AuthMode,
+    bearer_token,
+    form_login,
+    oauth2,
+    api_key_header,
+    api_key_value,
+) -> ActorConfig:
+    actor = ActorConfig(auth_mode=auth_mode)
+    if auth_mode == AuthMode.BEARER:
+        actor.bearer_token = bearer_token
+    elif auth_mode == AuthMode.FORM_LOGIN and form_login:
+        actor.form_login = FormLoginConfig(**form_login.model_dump())
+    elif auth_mode == AuthMode.OAUTH2 and oauth2:
+        actor.oauth2 = OAuth2Config(**oauth2.model_dump())
+    elif auth_mode == AuthMode.API_KEY:
+        actor.api_key_header = api_key_header
+        actor.api_key_value = api_key_value
+    return actor
+
+
+@router.post("/discover-probes", response_model=ProbeDiscoveryResponse)
+async def discover_probes(
+    payload: ProbeDiscoveryRequest,
+    user=Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+    session: AsyncSession = Depends(get_db),
+):
+    trace_step("API endpoint: POST /scans/discover-probes (app/api/routes/scans.py)")
+    """
+    Track: probe auto-discovery — GET-only sweep across the given targets,
+    authenticated as the primary (and, if configured, second) actor, looking
+    for JSON "list of resources I own" endpoints to pre-fill IDOR/mass-
+    assignment probe candidates. Never runs a probe itself; the GUI shows
+    what comes back for review before any actual scan uses it.
+
+    When repo_id is set, briefly clones the repo (same as a real scan) to
+    pull in its real route definitions via bridge.py's source-route
+    discovery — the only way a pure-JSON API (a bare origin GET finds
+    nothing; there's no HTML to crawl, no OpenAPI spec published) surfaces
+    its actual resource-list endpoints (/orders, /products, ...) instead of
+    every target contributing zero candidates.
+
+    Accessible to: All authenticated users (no scan quota consumed — this
+    doesn't create a scan record, just a handful of GET requests plus an
+    optional throwaway clone).
+    """
+    for url in payload.target_urls:
+        validate_public_http_url(url, allow_http=True)
+
+    sweep_urls = list(payload.target_urls)
+    temp_dir: Optional[Path] = None
+    if payload.repo_id:
+        try:
+            repo_service = RepositoryService()
+            repo = await repo_service.get(session, payload.repo_id, user)
+            repo_token = decrypt_secret(repo.access_token) if repo.access_token else None
+            temp_dir = Path(tempfile.mkdtemp(prefix="controlgate-probe-discovery-"))
+            repo_root = temp_dir / "repo"
+            scan_service = ScanService(db)
+            await asyncio.to_thread(scan_service._clone_repo, repo.url, payload.repo_branch, repo_token, repo_root)
+
+            from app.domain.analysis.dast.bridge import discover_routes_from_source
+
+            for base_url in payload.target_urls:
+                parts = urlsplit(base_url)
+                origin = f"{parts.scheme}://{parts.netloc}"
+                try:
+                    endpoints = discover_routes_from_source(repo_root, origin)
+                except Exception as exc:
+                    logger.warning(f"Source-route discovery failed for {origin}: {exc}")
+                    continue
+                sweep_urls.extend(e.url for e in endpoints if e.method == "GET" and e.url not in sweep_urls)
+        except (AuthorizationException, ResourceNotFoundException) as e:
+            raise e.to_http_exception()
+        except Exception as exc:
+            logger.warning(f"repo_id={payload.repo_id} clone/route-discovery failed (non-blocking): {exc}")
+        finally:
+            if temp_dir is not None:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    try:
+        actor = _build_probe_discovery_actor(
+            payload.dynamic_auth_mode, payload.dynamic_bearer_token, payload.dynamic_form_login,
+            payload.dynamic_oauth2, payload.dynamic_api_key_header, payload.dynamic_api_key_value,
+        )
+        second_actor = None
+        if payload.dynamic_second_actor_auth_mode != AuthMode.NONE:
+            second_actor = _build_probe_discovery_actor(
+                payload.dynamic_second_actor_auth_mode, payload.dynamic_second_actor_bearer_token,
+                payload.dynamic_second_actor_form_login, payload.dynamic_second_actor_oauth2,
+                payload.dynamic_second_actor_api_key_header, payload.dynamic_second_actor_api_key_value,
+            )
+        # target_url is required by DynamicScanConfig's dataclass shape but
+        # unused here — discover_probe_candidates takes the full sweep_urls
+        # list directly, this pair is just for auth/session management.
+        config = DynamicScanConfig(target_url=payload.target_urls[0], actor=actor, second_actor=second_actor)
+        async with DastSessionPair(config) as pair:
+            result = await discover_probe_candidates(
+                pair.primary, sweep_urls, second_actor_session=pair.secondary,
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Probe discovery failed: {str(e)}")
+
+    return ProbeDiscoveryResponse(
+        idor_candidates=[IdorCandidateRead(**vars(c)) for c in result.idor_candidates],
+        mass_assignment_candidates=[MassAssignmentCandidateRead(**vars(c)) for c in result.mass_assignment_candidates],
+        notes=result.notes,
+    )
 
 
 @router.get("/diff-files")

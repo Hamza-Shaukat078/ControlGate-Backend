@@ -80,7 +80,11 @@ class TestBridgeTargetsComputedForHybridScan:
             )
 
         run_dynamic_checks_mock.assert_awaited_once()
-        bridge_targets = run_dynamic_checks_mock.await_args.args[-1]
+        # _run_dynamic_checks is called with every argument by keyword
+        # (scan_service.py's internal dispatch calls all switched to
+        # keyword-only after a positional misalignment bug — see the
+        # comments at each call site).
+        bridge_targets = run_dynamic_checks_mock.await_args.kwargs["bridge_targets"]
         assert len(bridge_targets) == 1
         target = bridge_targets[0]
         assert target.dynamic_rule_id == "OPEN_REDIRECT_LIVE"
@@ -112,7 +116,7 @@ class TestBridgeTargetsComputedForHybridScan:
                 file_paths=None, target_url=TARGET, scan_type="hybrid",
             )
 
-        bridge_targets = run_dynamic_checks_mock.await_args.args[-1]
+        bridge_targets = run_dynamic_checks_mock.await_args.kwargs["bridge_targets"]
         assert bridge_targets == []
 
     @pytest.mark.asyncio
@@ -129,6 +133,7 @@ class TestBridgeTargetsComputedForHybridScan:
             "url": f"{TARGET}/go", "method": "GET", "note": "confirmed live",
             "severity": "medium", "confidence": 0.8,
             "evidence": "bridge:vuln-1:app.py:8",
+            "bridge_static_finding_id": "vuln-1",
         }]
 
         with patch.object(ScanService, "_clone_repo", fake_clone), \
@@ -149,6 +154,98 @@ class TestBridgeTargetsComputedForHybridScan:
         vuln = doc["summary"]["vulnerabilities"][0]
         assert vuln["dynamic_confirmed"] is True
         assert vuln["bridge_confirmed"] is True
+
+    @pytest.mark.asyncio
+    async def test_bridge_pass_downgrades_confidence_without_dropping_finding(self):
+        # Phase 5.2 — reverse bridge: a bridge finding that comes back a
+        # clean PASS against the exact route a static finding flagged
+        # halves that finding's confidence and tags it, but the finding
+        # itself must still be present in the report (downgrade, not delete).
+        svc, db, scan_id, fake_clone = await _make_service_with_flask_repo()
+        static_vuln = {
+            "id": "vuln-1", "type": "UNVALIDATED_REDIRECT", "severity": "medium",
+            "asvs_controls": ["V3.7.2"], "confidence": 0.8,
+            "location": {"file": "app.py", "start_line": 8, "end_line": 9},
+        }
+        static_result = _fake_analysis_result([dict(static_vuln)])
+        dynamic_findings = [{
+            "control_id": "V3.7.2", "verdict": "pass", "rule_id": "OPEN_REDIRECT_LIVE",
+            "url": f"{TARGET}/go", "method": "GET", "note": "no redirect observed",
+            "severity": "medium", "confidence": 0.5,
+            "evidence": "bridge:vuln-1:app.py:8",
+            "bridge_static_finding_id": "vuln-1",
+        }]
+
+        with patch.object(ScanService, "_clone_repo", fake_clone), \
+             patch("app.services.scan_service.get_pipeline") as mock_get_pipeline, \
+             patch.object(ScanService, "_run_dynamic_checks",
+                          AsyncMock(return_value=(dynamic_findings, []))):
+            mock_pipeline = MagicMock()
+            mock_pipeline.analyze_repository = AsyncMock(return_value=static_result)
+            mock_get_pipeline.return_value = mock_pipeline
+
+            await svc._run_repository_scan(
+                scan_id, repo_id=1, branch="main", scan_mode="DEEP",
+                repo_url="https://git.example/repo.git", repo_provider="GIT", repo_token=None,
+                file_paths=None, target_url=TARGET, scan_type="hybrid",
+            )
+
+        doc = await db.scans.find_one({"scan_id": scan_id})
+        vulns = doc["summary"]["vulnerabilities"]
+        assert len(vulns) == 1  # never dropped
+        vuln = vulns[0]
+        assert vuln["dynamic_contradicted"] is True
+        assert vuln["confidence"] == 0.4  # 0.8 * 0.5
+        assert "dynamic_confirmed" not in vuln
+        assert "bridge_confirmed" not in vuln
+
+    @pytest.mark.asyncio
+    async def test_bridge_confirmed_takes_priority_over_contradicted(self):
+        # If (unusually) multiple bridge findings exist for the same static
+        # id and the strongest is FAIL/CONFIRMED, a co-occurring PASS from a
+        # *different* bridge finding must not also mark it contradicted —
+        # the two tags are mutually exclusive on one finding.
+        svc, db, scan_id, fake_clone = await _make_service_with_flask_repo()
+        static_vuln = {
+            "id": "vuln-1", "type": "UNVALIDATED_REDIRECT", "severity": "medium",
+            "asvs_controls": ["V3.7.2"], "confidence": 0.8,
+            "location": {"file": "app.py", "start_line": 8, "end_line": 9},
+        }
+        static_result = _fake_analysis_result([dict(static_vuln)])
+        dynamic_findings = [
+            {
+                "control_id": "V3.7.2", "verdict": "fail", "rule_id": "OPEN_REDIRECT_LIVE",
+                "url": f"{TARGET}/go", "method": "GET", "note": "confirmed live",
+                "severity": "medium", "confidence": 0.8,
+                "evidence": "bridge:vuln-1:app.py:8", "bridge_static_finding_id": "vuln-1",
+            },
+            {
+                "control_id": "V3.7.2", "verdict": "pass", "rule_id": "OPEN_REDIRECT_LIVE",
+                "url": f"{TARGET}/go2", "method": "GET", "note": "no redirect on this variant",
+                "severity": "medium", "confidence": 0.5,
+                "evidence": "bridge:vuln-1:app.py:8", "bridge_static_finding_id": "vuln-1",
+            },
+        ]
+
+        with patch.object(ScanService, "_clone_repo", fake_clone), \
+             patch("app.services.scan_service.get_pipeline") as mock_get_pipeline, \
+             patch.object(ScanService, "_run_dynamic_checks",
+                          AsyncMock(return_value=(dynamic_findings, []))):
+            mock_pipeline = MagicMock()
+            mock_pipeline.analyze_repository = AsyncMock(return_value=static_result)
+            mock_get_pipeline.return_value = mock_pipeline
+
+            await svc._run_repository_scan(
+                scan_id, repo_id=1, branch="main", scan_mode="DEEP",
+                repo_url="https://git.example/repo.git", repo_provider="GIT", repo_token=None,
+                file_paths=None, target_url=TARGET, scan_type="hybrid",
+            )
+
+        doc = await db.scans.find_one({"scan_id": scan_id})
+        vuln = doc["summary"]["vulnerabilities"][0]
+        assert vuln["bridge_confirmed"] is True
+        assert vuln["confidence"] == 0.8  # untouched — no downgrade applied
+        assert "dynamic_contradicted" not in vuln
 
     @pytest.mark.asyncio
     async def test_static_only_scan_never_computes_bridge_targets(self):

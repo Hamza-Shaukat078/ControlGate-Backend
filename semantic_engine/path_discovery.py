@@ -11,7 +11,11 @@ from typing import Dict, List, Optional, Set, Tuple
 from app.schemas.graph import SemanticGraph, GraphNode
 from app.enums.node_type import NodeType
 from app.enums.edge_type import EdgeType
-from semantic_engine.query_executor.executor import CodeSlice
+from semantic_engine.query_executor.executor import (
+    CodeSlice,
+    sink_call_is_parameterized_query,
+    sink_looks_like_db_query_call,
+)
 from semantic_engine.query_store.loader import QueryStore
 
 
@@ -80,8 +84,27 @@ class PathDiscovery:
         candidates.sort(key=lambda c: c.score, reverse=True)
         candidates = candidates[: self.max_candidates]
 
+        # Bug fix — the exact same false positive SQL_INJECTION's own
+        # sink-matching has (query_executor.py: sink matched by call NAME
+        # alone, no argument-position awareness) shows up here too, under
+        # the generic "PATH_DISCOVERY" identity: a taint path into
+        # `pool.query(text, params)`'s safe, bind-params SECOND argument
+        # gets flagged the same as one reaching the query-string argument
+        # itself. This class doesn't require SQL_INJECTION's specific
+        # source-pattern list to match (that's *why* it fell through to
+        # PATH_DISCOVERY in the first place — the source label was just
+        # "req", not one of SQL_INJECTION's declared "req.query"/"req.body"
+        # patterns), so the same suppression has to be re-checked here
+        # independently rather than only in _extract_slice. Confirmed false
+        # positive against a real scan: 13 of 13 PATH_DISCOVERY findings
+        # were this exact `req -> query` shape, the single largest static
+        # finding category that scan produced.
         slices: List[CodeSlice] = []
         for cand in candidates:
+            if sink_looks_like_db_query_call(cand.sink_node) and sink_call_is_parameterized_query(
+                cand.sink_node, source_code_map.get(cand.sink_node.file, "")
+            ):
+                continue
             snippet, location = self._extract_snippet(node_map, edge_map, cand.path_nodes, source_code_map)
             rule_id, rule_name, owasp, cwe = self._attribute_rule(
                 cand.source_node.id, cand.sink_node.id, source_owners, sink_owners, query_store

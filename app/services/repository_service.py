@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import subprocess
@@ -123,7 +124,16 @@ class RepositoryService:
                 token = decrypt_secret(repo.access_token)
                 if token and branch_url.startswith("https://"):
                     branch_url = branch_url.replace("https://", f"https://{token}@", 1)
-                result = subprocess.run(
+                # subprocess.run() is blocking — running it inline in this
+                # async handler would stall the entire event loop (every
+                # other in-flight request, including unrelated scan-status
+                # polls) for up to the full 10s timeout, once per call. A
+                # repo list page fetching branches for N repos serializes
+                # into N blocked event-loop turns instead of N concurrent
+                # ones. asyncio.to_thread() keeps the block confined to a
+                # worker thread.
+                result = await asyncio.to_thread(
+                    subprocess.run,
                     ["git", "ls-remote", "--heads", branch_url],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
                     env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
@@ -156,7 +166,12 @@ class RepositoryService:
                 archive_path = max(archives, key=lambda p: p.stat().st_mtime)
                 self._extract_archive(archive_path, repo_root)
             elif repo.url:
-                self._clone_repo(repo.url, branch, decrypt_secret(repo.access_token), repo_root)
+                # Same blocking-subprocess-in-an-async-handler issue as
+                # branches() above — _clone_repo() shells out to `git
+                # clone` synchronously; keep it off the event loop.
+                await asyncio.to_thread(
+                    self._clone_repo, repo.url, branch, decrypt_secret(repo.access_token), repo_root,
+                )
             else:
                 raise HTTPException(status_code=400, detail="Repository URL is missing")
 

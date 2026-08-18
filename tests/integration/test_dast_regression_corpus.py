@@ -7,7 +7,7 @@ verdict matrix in one place.
 
 Every individual check already has its own live tests in test_dast_live.py
 — those catch a single check regressing. This file exists for a different
-failure mode: a shared helper (e.g. _responses_differ_significantly,
+failure mode: a shared helper (e.g. oracles.py's response_diff_oracle,
 DastSession.request, run_payload_checks' rule-filtering) silently breaking
 *several* rules at once, or a new rule shadowing/interfering with an
 existing one when they run back-to-back against the same target. Nothing
@@ -53,8 +53,17 @@ _PAYLOAD_CHECK_TARGETS = {
     "UNAUTHENTICATED_ACCESS_ALLOWED": ("/admin-open", "/admin"),
     "REFLECTED_XSS_LIVE": ("/search?q=hello", "/search-safe?q=hello"),
     "SQL_INJECTION_LIVE": ("/products?id=1", "/products-safe?id=1"),
+    "NOSQL_INJECTION_LIVE": ("/accounts?user=dast-probe", "/accounts-safe?user=dast-probe"),
+    "CORS_MISCONFIG_LIVE": ("/cors", "/cors-safe"),
 }
-_NO_DETERMINISTIC_FIXTURE = {"REQUEST_SMUGGLING"}
+# COMMAND_INJECTION_LIVE/SSTI_LIVE/XXE_LIVE have no deterministic fixture
+# here for the same reason REQUEST_SMUGGLING doesn't: a plain
+# http.server-based fake can't reproduce a real shell executing `sleep`, a
+# real template engine evaluating `{{7*7}}`, or a real XML parser resolving
+# external entities — their own confirmation paths (timing_oracle,
+# oob_oracle) are exercised directly by tests/unit/test_dast_checks.py's
+# mocked/faked-collaborator tests instead.
+_NO_DETERMINISTIC_FIXTURE = {"REQUEST_SMUGGLING", "COMMAND_INJECTION_LIVE", "SSTI_LIVE", "XXE_LIVE"}
 
 # UNAUTHENTICATED_ACCESS_ALLOWED needs an authenticated baseline session to
 # compare against (NOT_CONFIGURED otherwise) — every other check here is

@@ -52,6 +52,17 @@ _login_state = {"login_count": 0, "current_session": None, "successes_this_sessi
 # Fake "table" for the /products SQLi routes.
 _PRODUCTS = {"1": "Widget", "2": "Gadget", "3": "Gizmo"}
 
+# /csrf-login-form serves this token, /csrf-login requires it back verbatim
+# in the POST body — backs the COOKIE + CSRF live-integration test
+# (FormLoginConfig.csrf_field/csrf_source_url).
+CSRF_LOGIN_TOKEN_VALUE = "csrf-login-token-xyz"
+
+# Multi-step flow (login -> dashboard -> update-profile) backing the
+# state/form-transition crawl live-integration test — deliberately not
+# gated on the same _login_state as /login above, so this flow's tests
+# don't interact with /protected-data's session-expiry tests.
+_PROFILE_STATE = {"display_name": ""}
+
 
 def _simulate_unescaped_query(raw_value: str) -> list:
     """Simulates SELECT * FROM products WHERE id = '<raw_value>' with no
@@ -87,7 +98,12 @@ class VulnHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parts = urlsplit(self.path)
         path = parts.path
-        qs = parse_qs(parts.query)
+        # keep_blank_values=True: matches a real Express+qs (or PHP) query
+        # parser, which keeps an empty-valued param (?user[$ne]=) rather
+        # than silently dropping the key the way Python's default
+        # parse_qs would — the NoSQL operator-injection fixture routes
+        # below rely on the bracket-notation key itself being present.
+        qs = parse_qs(parts.query, keep_blank_values=True)
 
         if path == "/":
             body = (
@@ -98,6 +114,35 @@ class VulnHandler(BaseHTTPRequestHandler):
                 b"<form method='POST' action='/redeem-vulnerable'>"
                 b"<input name='token'/></form>"
                 b"</body></html>"
+            )
+            self._send(200, body)
+            return
+
+        if path == "/flow-start":
+            # State/form-transition crawl fixture: a login form is the only
+            # thing on this page — /flow-login's own response is what
+            # reveals the next form (/profile-update), not this page, so
+            # crawl_form_transitions has to actually chain the submission,
+            # not just find both forms by crawling links.
+            body = (
+                b"<html><body><form method='POST' action='/flow-login'>"
+                b"<input name='user'/><input name='pass'/></form></body></html>"
+            )
+            self._send(200, body)
+            return
+
+        if path == "/flow-done":
+            self._send(200, b"<html><body>flow complete</body></html>")
+            return
+
+        if path == "/csrf-login-form":
+            # COOKIE + CSRF fixture: serves the token /csrf-login requires
+            # back verbatim, as a hidden input — the shape
+            # DastSession._extract_csrf_token's <input> pattern expects.
+            body = (
+                b"<html><body><form method='POST' action='/csrf-login'>"
+                b"<input type='hidden' name='csrf_token' value='" + CSRF_LOGIN_TOKEN_VALUE.encode() + b"'/>"
+                b"<input name='username'/><input name='password'/></form></body></html>"
             )
             self._send(200, body)
             return
@@ -323,6 +368,61 @@ class VulnHandler(BaseHTTPRequestHandler):
             self._send(200, b"fetching arbitrary URLs is not supported")
             return
 
+        if path == "/accounts":
+            # Vulnerable on purpose: simulates a MongoDB-style filter that
+            # honors a bracket-notation operator key exactly the way
+            # Express+qs would parse it into a nested {"user": {"$ne": ...}}
+            # filter — any operator key at all bypasses the exact-match
+            # check and returns every account, the NoSQL analog of
+            # _simulate_unescaped_query's "' OR '1'='1" bypass above.
+            if any(key.startswith("user[$") for key in qs):
+                # Deliberately large — every account in the "DB", repeated,
+                # same "unmistakably bigger" shape as _simulate_unescaped_query's
+                # always-true branch above, well past response_diff_oracle's
+                # size-delta threshold (unlike a short, single-word difference).
+                body = ("<html><body>accounts: " + "admin, alice, bob, " * 50 + "</body></html>").encode()
+            else:
+                user = qs.get("user", [""])[0]
+                body = (
+                    b"<html><body>accounts: alice</body></html>" if user == "alice"
+                    else b"<html><body>no such account</body></html>"
+                )
+            self._send(200, body)
+            return
+
+        if path == "/accounts-safe":
+            # Safe: 'user' is always read as a single literal string field
+            # (e.g. a typed/validated ODM field, not a raw dict merge) —
+            # a bracket-notation key is simply a different, unrecognized
+            # query param, never reinterpreted as an operator.
+            user = qs.get("user", [""])[0]
+            body = (
+                b"<html><body>accounts: alice</body></html>" if user == "alice"
+                else b"<html><body>no such account</body></html>"
+            )
+            self._send(200, body)
+            return
+
+        if path == "/cors":
+            # Vulnerable on purpose: reflects whatever Origin the caller
+            # sends back verbatim, with credentials allowed — any origin
+            # can make a credentialed cross-site request and read the
+            # response.
+            origin = self.headers.get("Origin", "")
+            self._send(200, b"data", extra_headers=[
+                ("Access-Control-Allow-Origin", origin),
+                ("Access-Control-Allow-Credentials", "true"),
+            ])
+            return
+
+        if path == "/cors-safe":
+            # Safe: a fixed allowlisted origin, never the caller's own,
+            # and no credentials flag at all.
+            self._send(200, b"data", extra_headers=[
+                ("Access-Control-Allow-Origin", "https://trusted.example"),
+            ])
+            return
+
         if path == "/spa":
             # Track C2 fixture: a JS-rendered "SPA" shell — the raw body has
             # no <a href> at all (crawler.py's regex crawler would see
@@ -411,6 +511,41 @@ class VulnHandler(BaseHTTPRequestHandler):
                 self._send(401, b"bad credentials")
             return
 
+        if path == "/flow-login":
+            # Deliberately permissive (any username/password) — this fixture
+            # isn't testing auth enforcement, it's testing whether
+            # crawl_form_transitions actually submits this form and picks up
+            # the /profile-update form that only appears in *this*
+            # response's body, never on a page reachable by a plain link.
+            posted = parse_qs(body_bytes.decode("utf-8", errors="replace"))
+            user = posted.get("user", [""])[0]
+            body = (
+                f"<html><body>Welcome, {html.escape(user)}."
+                "<form method='POST' action='/profile-update'>"
+                "<input name='display_name'/></form>"
+                "</body></html>"
+            ).encode()
+            self._send(200, body)
+            return
+
+        if path == "/profile-update":
+            posted = parse_qs(body_bytes.decode("utf-8", errors="replace"))
+            _PROFILE_STATE["display_name"] = posted.get("display_name", [""])[0]
+            body = b"<html><body>Profile updated. <a href='/flow-done'>done</a></body></html>"
+            self._send(200, body)
+            return
+
+        if path == "/csrf-login":
+            posted = parse_qs(body_bytes.decode("utf-8", errors="replace"))
+            username = posted.get("username", [""])[0]
+            password = posted.get("password", [""])[0]
+            token = posted.get("csrf_token", [None])[0]
+            if username == LOGIN_USERNAME and password == LOGIN_PASSWORD and token == CSRF_LOGIN_TOKEN_VALUE:
+                self._send(200, b"ok", extra_headers=[("Set-Cookie", "csrf_session=authenticated; Path=/")])
+            else:
+                self._send(403, b"missing or invalid csrf token")
+            return
+
         if path == "/transfer":
             # Vulnerable on purpose: accepts the transfer regardless of
             # whether a valid csrf_token was submitted.
@@ -489,6 +624,9 @@ class VulnFixtureServer:
         _login_state["login_count"] = 0
         _login_state["current_session"] = None
         _login_state["successes_this_session"] = 0
+
+    def reset_profile_state(self):
+        _PROFILE_STATE["display_name"] = ""
 
     def __enter__(self) -> "VulnFixtureServer":
         self._thread.start()

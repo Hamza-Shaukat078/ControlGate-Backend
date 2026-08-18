@@ -8,7 +8,7 @@
     "level": "L3",
     "description": "Verify that the application is protected against CSV and Formula Injection. Special characters (=, +, -, @, tab, and the null character) must be escaped with a leading single quote if they appear as the first character in a field value when exporting to CSV or other spreadsheet formats (XLS, XLSX, ODF).",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "CSV_FORMULA_INJECTION"
   },
   {
     "control_id": "V1.3.12",
@@ -19,7 +19,7 @@
     "level": "L3",
     "description": "Verify that regular expressions are free from elements causing exponential backtracking, and ensure untrusted input is sanitized to mitigate ReDoS or Runaway Regex attacks.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "REDOS_VULNERABLE_REGEX"
   },
   {
     "control_id": "V1.5.3",
@@ -52,7 +52,7 @@
     "level": "L3",
     "description": "Verify that business logic flows require realistic human timing, preventing excessively rapid transaction submissions.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "HUMAN_TIMING_ENFORCEMENT_MARKER"
   },
   {
     "control_id": "V6.3.5",
@@ -63,7 +63,7 @@
     "level": "L3",
     "description": "Verify that users are notified of both successful and unsuccessful attempts to authenticate to an account, such as an unusual location or client being used, a partially successful multi-factor authentication (MFA) attempt, or a login attempted after a long period of inactivity.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SUSPICIOUS_AUTH_NOTIFICATION_MARKER"
   },
   {
     "control_id": "V6.3.6",
@@ -74,7 +74,7 @@
     "level": "L3",
     "description": "Verify that the application does not permit or facilitate the use of an email address as both an identifier and a single-factor or multi-factor authentication mechanism, as email accounts are frequently compromised.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "EMAIL_USED_AS_AUTH_FACTOR"
   },
   {
     "control_id": "V6.3.7",
@@ -85,7 +85,7 @@
     "level": "L3",
     "description": "Verify that users are notified after updates to their authentication details, such as credential resets, or updates to their email address or username.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "AUTH_DETAIL_CHANGE_NOTIFICATION_MARKER"
   },
   {
     "control_id": "V6.3.8",
@@ -96,7 +96,7 @@
     "level": "L3",
     "description": "Verify that it is not possible to deduce valid users based on responses to failed authentication challenges, including error messages, HTTP response codes, and timing attacks. This equally applies to registration and forgot password functionality.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "USER_ENUMERATION_VIA_AUTH_ERRORS"
   },
   {
     "control_id": "V6.4.5",
@@ -118,7 +118,7 @@
     "level": "L3",
     "description": "Verify that an administrator can initiate a password reset for a user, but that this does not allow the administrator to authenticate as, or otherwise choose or see, the resulting password.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "ADMIN_RESET_SETS_PASSWORD_DIRECTLY"
   },
   {
     "control_id": "V6.5.6",
@@ -129,7 +129,7 @@
     "level": "L3",
     "description": "Verify that any authentication factor, including physical devices, can be revoked in the event that it is lost, stolen, or otherwise suspected of being compromised.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "AUTH_FACTOR_REVOCATION_ENDPOINT_MARKER"
   },
   {
     "control_id": "V6.5.7",
@@ -140,7 +140,7 @@
     "level": "L3",
     "description": "Verify that biometric authentication is only used as a secondary mechanism alongside either something you have or something you know, and never as the sole authentication factor.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "BIOMETRIC_AS_SOLE_FACTOR"
   },
   {
     "control_id": "V6.5.8",
@@ -151,7 +151,7 @@
     "level": "L3",
     "description": "Verify that time-based OTP (TOTP) values are checked against a trusted server-side time source, and not a time value supplied by the client.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "TOTP_CLIENT_TIME_TRUSTED"
   },
   {
     "control_id": "V6.6.4",
@@ -162,7 +162,7 @@
     "level": "L3",
     "description": "Verify that push notifications used as an authentication or MFA factor are rate limited to protect against push notification bombing (spamming) attacks. Consider the use of number matching to further mitigate against this type of attack.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "PUSH_MFA_RATE_LIMITING_MARKER"
   },
   {
     "control_id": "V6.7.1",
@@ -184,7 +184,7 @@
     "level": "L3",
     "description": "Verify that the challenge nonce is at least 64 bits in length, and statistically unique or unique over the lifetime of the cryptographic device.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "WEAK_CHALLENGE_NONCE"
   },
   {
     "control_id": "V7.5.3",
@@ -195,7 +195,7 @@
     "level": "L3",
     "description": "Verify that highly sensitive transactions or operations require further authentication (at least one additional factor) or another form of secondary verification/proof of presence before being processed.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "STEPUP_CLAIMS_NOT_VALIDATED"
   },
   {
     "control_id": "V8.1.3",
@@ -228,7 +228,7 @@
     "level": "L3",
     "description": "Verify that adaptive controls based on contextual attributes are implemented for authentication and authorization decisions per the organization's documented policy, and that they are applied both at session start and periodically during the session.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "ADAPTIVE_AUTH_MARKER"
   },
   {
     "control_id": "V8.3.2",
@@ -272,7 +272,7 @@
     "level": "L3",
     "description": "Verify that the OAuth client only requests the scopes and authorization parameters it actually needs, rather than a broad or catch-all set of permissions.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "OAUTH_WILDCARD_SCOPE_REQUEST"
   },
   {
     "control_id": "V10.3.5",
@@ -283,7 +283,7 @@
     "level": "L3",
     "description": "Verify that the resource server prevents the use of stolen or replayed access tokens by requiring sender-constrained tokens, using either mutual TLS (mTLS) or Demonstrating Proof of Possession (DPoP).",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "BEARER_TOKEN_NOT_SENDER_CONSTRAINED"
   },
   {
     "control_id": "V10.4.12",
@@ -371,7 +371,7 @@
     "level": "L3",
     "description": "Verify that all cryptographic operations are constant-time, with no short-circuiting comparisons, calculations, or return paths that could leak timing information about a secret.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "TIMING_ATTACK"
   },
   {
     "control_id": "V11.2.5",
@@ -393,7 +393,7 @@
     "level": "L3",
     "description": "Verify that nonces and initialization vectors are never reused for the same key and data pair, and that the generation method used fits the algorithm's requirements.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "USE_OF_HARD_CODED_IV"
   },
   {
     "control_id": "V11.3.5",
@@ -404,7 +404,7 @@
     "level": "L3",
     "description": "Verify that any combination of encryption and a MAC operates in encrypt-then-MAC mode.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "MAC_THEN_ENCRYPT_PATTERN"
   },
   {
     "control_id": "V11.5.2",
@@ -426,7 +426,7 @@
     "level": "L3",
     "description": "Verify that only approved key-exchange algorithms (such as Diffie-Hellman) are used, with secure parameters.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "INSUFFICIENT_CRYPTO_KEY_SIZE"
   },
   {
     "control_id": "V11.7.1",
@@ -459,7 +459,7 @@
     "level": "L3",
     "description": "Verify that proper certificate revocation, such as OCSP stapling, is enabled and configured.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V12.1.5",
@@ -470,7 +470,7 @@
     "level": "L3",
     "description": "Verify that Encrypted Client Hello (ECH) is enabled to prevent exposure of the Server Name Indication (SNI).",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V12.3.5",
@@ -481,7 +481,7 @@
     "level": "L3",
     "description": "Verify that intra-service communication uses strong mutual authentication, such as TLS client authentication or service-mesh mTLS, to verify the identity of each endpoint.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_yaml"
   },
   {
     "control_id": "V13.1.2",
@@ -536,7 +536,7 @@
     "level": "L3",
     "description": "Verify that all cryptographic operations are performed via an isolated security module, such as a vault or Hardware Security Module (HSM).",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "CRYPTO_VIA_ISOLATED_SECURITY_MODULE_MARKER"
   },
   {
     "control_id": "V13.3.4",
@@ -547,7 +547,7 @@
     "level": "L3",
     "description": "Verify that secrets are configured to expire or rotate according to documentation.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_secret_rotation_terraform, ConfigInspector._inspect_secrets_manager_json"
   },
   {
     "control_id": "V13.4.6",
@@ -558,7 +558,7 @@
     "level": "L3",
     "description": "Verify that the application does not expose detailed backend component version information.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V13.4.7",
@@ -569,7 +569,7 @@
     "level": "L3",
     "description": "Verify that the web tier only serves files with specific, expected file extensions.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V14.2.5",
@@ -580,7 +580,7 @@
     "level": "L3",
     "description": "Verify that caching is only used for content of an expected content-type, and that no sensitive dynamic content is cached. Verify that requests for non-existent files return a 404 or 302 rather than a different, valid file, to prevent Web Cache Deception.",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_nginx"
   },
   {
     "control_id": "V14.2.6",
@@ -591,7 +591,7 @@
     "level": "L3",
     "description": "Verify that only the minimum required sensitive data is returned in a response (e.g. a masked card number), and that the full value is only shown when the user explicitly requests it.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "UNMASKED_SENSITIVE_FIELD_IN_RESPONSE"
   },
   {
     "control_id": "V14.2.7",
@@ -602,7 +602,7 @@
     "level": "L3",
     "description": "Verify that sensitive information is subject to a data-retention classification, and that stale or no-longer-needed sensitive data is deleted on a defined schedule.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "DATA_RETENTION_DELETION_JOB_MARKER"
   },
   {
     "control_id": "V14.2.8",
@@ -613,7 +613,7 @@
     "level": "L3",
     "description": "Verify that sensitive metadata is stripped from user-submitted files (e.g. EXIF/GPS data in images) unless the user explicitly consents to it being stored.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "UPLOAD_METADATA_NOT_STRIPPED"
   },
   {
     "control_id": "V15.1.4",
@@ -622,7 +622,7 @@
     "section_id": "15.1",
     "section_name": "Secure Coding and Architecture Documentation",
     "level": "L3",
-    "description": "Verify that documentation highlights third-party libraries that are considered 'risky components' — for example, those with a history of vulnerabilities, that are unmaintained, or that perform unusually dangerous operations.",
+    "description": "Verify that documentation highlights third-party libraries that are considered 'risky components' \u2014 for example, those with a history of vulnerabilities, that are unmaintained, or that perform unusually dangerous operations.",
     "detection_strategy": "manual_attestation",
     "check_ref": null
   },
@@ -646,7 +646,7 @@
     "level": "L3",
     "description": "Verify that third-party components and their transitive dependencies are sourced from the expected repository, to prevent dependency confusion attacks (e.g. a scoped/private package name being resolved from a public registry instead of the intended private one).",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_dependency_registry_pinning"
   },
   {
     "control_id": "V15.2.5",
@@ -679,7 +679,7 @@
     "level": "L3",
     "description": "Verify that checks on the state of a resource (such as its existence or permissions) and the subsequent action taken on that resource are performed as a single atomic operation, to prevent Time-of-Check to Time-of-Use (TOCTOU) race conditions.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "RACE_CONDITION_FILE"
   },
   {
     "control_id": "V15.4.3",
@@ -712,7 +712,7 @@
     "level": "L3",
     "description": "Verify that a 'last resort' error handler is defined which will catch all unhandled exceptions, and can be used to avoid leaking sensitive error details while also avoiding the whole process crashing (also known as a Global Exception Handler).",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "LAST_RESORT_ERROR_HANDLER_MARKER"
   },
   {
     "control_id": "V17.1.2",
@@ -723,7 +723,7 @@
     "level": "L3",
     "description": "Verify that the TURN service is resistant to resource exhaustion when legitimate users open a large number of ports (e.g. per-user/total allocation quotas and a bounded relay port range).",
     "detection_strategy": "config_inspection",
-    "check_ref": null
+    "check_ref": "ConfigInspector._inspect_coturn"
   },
   {
     "control_id": "V17.2.5",
@@ -767,6 +767,6 @@
     "level": "L3",
     "description": "Verify that the DTLS certificate presented during the handshake is checked against the fingerprint attribute exchanged in the SDP offer/answer, and that the stream is terminated on a mismatch.",
     "detection_strategy": "static_code",
-    "check_ref": null
+    "check_ref": "SDP_FINGERPRINT_VERIFICATION_MARKER"
   }
 ]

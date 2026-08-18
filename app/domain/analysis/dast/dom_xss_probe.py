@@ -94,6 +94,11 @@ async def run_dom_xss_probe(
     finally:
         await page.close()
 
+    # No DastSession/httpx.Response here at all (real browser navigation,
+    # not an HTTP request this engine made itself) — the payload/observed
+    # marker are the only evidence available, and neither contains
+    # anything session.redact() would need to strip (a random hex token,
+    # not real credentials).
     if observed == marker:
         return DynamicFinding(
             control_id=control_id, verdict=Verdict.FAIL, rule_id=RULE_ID,
@@ -101,11 +106,13 @@ async def run_dom_xss_probe(
             note="A marker placed in the URL fragment executed as live JS after the page loaded — "
                  "client-side code reads location.hash and writes it into the DOM unescaped "
                  f"(marker: {marker}, never sent to the server)",
-            confidence=0.8,
+            confidence=0.8, payload=payload, evidence_type="js_execution",
+            proof={"fragment_payload": payload, "observed_marker": observed, "expected_marker": marker},
         )
     return DynamicFinding(
         control_id=control_id, verdict=Verdict.PASS, rule_id=RULE_ID,
         url=url, method="GET", severity=severity,
         note="The URL-fragment marker did not execute as JS after the page loaded",
-        confidence=0.55,
+        confidence=0.55, payload=payload, evidence_type="js_execution",
+        proof={"fragment_payload": payload, "observed_marker": observed, "expected_marker": marker},
     )

@@ -327,24 +327,29 @@ class TestAsvsCatalogCoverage:
     def test_every_mapped_control_is_static_code_strategy(self):
         # A rule's asvs_controls entry is silently inert in asvs_service.py's
         # verdict policy unless that control's detection_strategy is also
-        # "static_code" (see the module docstring there) — with one documented
-        # exception: HYBRID_STATIC_ELIGIBLE_CONTROLS lists the handful of
+        # "static_code" (see the module docstring there) — with two documented
+        # exceptions: HYBRID_STATIC_ELIGIBLE_CONTROLS lists the handful of
         # config_inspection/dynamic_probe controls that asvs_service.py's
         # _compute_result *also* special-cases to accept a static rule match
-        # for. Importing that constant (rather than hardcoding the exception
-        # list here) keeps this test honest if that special-casing ever
-        # changes. This is the general form of the check problem #3 added for
-        # its 10 specific new mappings — it now guards the entire catalog,
-        # including every rule that already had a mapping before this fix.
-        from app.services.asvs_service import HYBRID_STATIC_ELIGIBLE_CONTROLS
+        # for, and HYBRID_ATTESTATION_ELIGIBLE_CONTROLS does the same for
+        # manual_attestation controls (currently just V1.1.1 — a confirmed
+        # DOUBLE_DECODE_CANONICALIZATION hit can fail it, but never passes it
+        # on its own). Importing both constants (rather than hardcoding the
+        # exception list here) keeps this test honest if that special-casing
+        # ever changes. This is the general form of the check problem #3
+        # added for its 10 specific new mappings — it now guards the entire
+        # catalog, including every rule that already had a mapping before
+        # this fix.
+        from app.services.asvs_service import HYBRID_STATIC_ELIGIBLE_CONTROLS, HYBRID_ATTESTATION_ELIGIBLE_CONTROLS
 
+        hybrid_eligible = HYBRID_STATIC_ELIGIBLE_CONTROLS | HYBRID_ATTESTATION_ELIGIBLE_CONTROLS
         wrong_strategy = {
             (rule_id, cid, ALL_CONTROLS_BY_ID[cid]["detection_strategy"])
             for rule_id, r in QUERIES.items()
             for cid in r.get("asvs_controls", [])
             if cid in ALL_CONTROLS_BY_ID
             and ALL_CONTROLS_BY_ID[cid]["detection_strategy"] != "static_code"
-            and cid not in HYBRID_STATIC_ELIGIBLE_CONTROLS
+            and cid not in hybrid_eligible
         }
         assert not wrong_strategy, f"rules mapped to a non-static_code control: {sorted(wrong_strategy)}"
 
@@ -685,6 +690,31 @@ class TestDebugModeEnabled:
         assert not fires('DEBUG_MODE_ENABLED', 'DEBUG = False')
 
 
+class TestAuthBackdoorBypass:
+    RULE = "AUTH_BACKDOOR_BYPASS"
+
+    def test_bypass_auth_keyword_detected(self):
+        assert fires(self.RULE, "if bypass_auth:\n    return True")
+
+    def test_hardcoded_admin_credential_check_detected(self):
+        assert fires(self.RULE, 'if username == "admin" and password == "SuperSecret123":')
+
+    def test_debug_header_bypass_detected(self):
+        assert fires(self.RULE, 'if request.headers.get("X-Debug-Auth"):\n    return grant_session()')
+
+    def test_env_var_bypass_detected(self):
+        assert fires(self.RULE, 'if os.getenv("BYPASS_AUTH"):\n    return True')
+
+    def test_js_env_var_bypass_detected(self):
+        assert fires(self.RULE, 'if (process.env.SKIP_AUTH) { return next(); }')
+
+    def test_ordinary_login_check_not_detected(self):
+        assert not fires(self.RULE, "if authenticate(username, password):\n    return create_session(user)")
+
+    def test_admin_role_check_without_hardcoded_password_not_detected(self):
+        assert not fires(self.RULE, 'if user.role == "admin":\n    return grant_dashboard_access()')
+
+
 class TestDeprecatedClientTech:
     def test_vulnerable_detected(self):
         assert fires('DEPRECATED_CLIENT_TECH', 'var obj = new ActiveXObject("Msxml2.XMLHTTP");')
@@ -919,3 +949,163 @@ class TestWebsocketOriginNotChecked:
 
     def test_safe_not_detected(self):
         assert not fires('WEBSOCKET_ORIGIN_NOT_CHECKED', 'def check_origin(self, origin):\n    return origin in ALLOWED_ORIGINS')
+
+
+class TestAuthFailureSilentlySwallowed:
+    """V16.3.1/V16.3.2 previously had only compliant-polarity markers
+    (AUTH_OPERATION_LOGGED_MARKER/AUTHZ_DENIAL_LOGGED_MARKER) — a match
+    proves logging is present, but a non-match proves nothing (the app
+    might log via a name/wrapper this rule's keyword list doesn't
+    recognize). This is a genuine vulnerable-polarity companion: a bare
+    except/empty catch block *directly next to* an auth-context branch is a
+    positive, narrow anti-pattern (the failure is provably discarded), not
+    an absence inference."""
+
+    RULE = 'AUTH_FAILURE_SILENTLY_SWALLOWED'
+    VULNERABLE = [
+        ("def login(request):\n    try:\n        authenticate(request)\n    except:\n        pass",
+         "bare except/pass directly after an authenticate() call"),
+        ("function login(req, res) {\n  try {\n    authorize(req);\n  } catch (e) {}\n}",
+         "empty catch block directly after an authorize() call"),
+    ]
+    SAFE = [
+        ("def login(request):\n    try:\n        authenticate(request)\n    except AuthError:\n"
+         "        logger.warning('login failed')\n        raise",
+         "auth failure is logged and re-raised"),
+        ("def parse_config(path):\n    try:\n        return json.load(open(path))\n    except:\n        pass",
+         "bare except/pass with no auth-context keyword nearby"),
+    ]
+
+    @pytest.mark.parametrize("code,desc", VULNERABLE)
+    def test_vulnerable(self, code, desc): assert fires(self.RULE, code), desc
+
+    @pytest.mark.parametrize("code,desc", SAFE)
+    def test_safe(self, code, desc): assert not fires(self.RULE, code), desc
+
+
+class TestDoubleDecodeCanonicalization:
+    """V1.1.1 ('decode/canonicalize untrusted input exactly once, before
+    validation') stays manual_attestation for the pass case — proving that
+    ordering property holds everywhere isn't something static analysis can
+    soundly assert (framework-level implicit decoding this scanner can't
+    see, no fixed signature for what counts as 'validation'). This rule is
+    deliberately narrow: it only catches decode wrapping decode in the same
+    expression — the classic %252e%252e%252f-style double-decode bypass
+    shape — not the broader across-statements ordering violation. See
+    HYBRID_ATTESTATION_ELIGIBLE_CONTROLS in asvs_service.py: a confirmed hit
+    here fails the control outright, but its absence never passes it."""
+
+    RULE = 'DOUBLE_DECODE_CANONICALIZATION'
+    VULNERABLE = [
+        ("path = unquote(unquote(request.args['path']))", "Python: unquote wrapping unquote"),
+        ("safe = urllib.parse.unquote(urllib.parse.unquote(raw))", "Python: fully-qualified unquote wrapping itself"),
+        ("value = html.unescape(unquote(user_input))", "Python: unescape wrapping a different decode call"),
+        ("target = decodeURIComponent(decodeURIComponent(req.query.path))", "JS: decodeURIComponent wrapping itself"),
+        ("data = atob(atob(token))", "JS: base64 atob wrapping itself"),
+    ]
+    SAFE = [
+        ("path = unquote(request.args['path'])", "single decode, no nesting"),
+        ("target = decodeURIComponent(req.query.path)", "single JS decode, no nesting"),
+        ("packed = base64.b64encode(base64.b64decode(raw))", "decode-then-encode round trip, not double-decode"),
+        ("path = unquote(request.args['path'])\nif not is_safe(path):\n    abort(400)", "decode once, then validate — the ordering this rule doesn't attempt to check"),
+    ]
+
+    @pytest.mark.parametrize("code,desc", VULNERABLE)
+    def test_vulnerable(self, code, desc): assert fires(self.RULE, code), desc
+
+    @pytest.mark.parametrize("code,desc", SAFE)
+    def test_safe(self, code, desc): assert not fires(self.RULE, code), desc
+
+
+class TestManualUrlHostParsing:
+    """V1.5.3 ('different parsers for the same data type behave consistently')
+    stays manual_attestation for the pass case — proving two parsers actually
+    disagree, or comparing a parser against one in a different service, needs
+    differential fuzzing or cross-service visibility this scanner doesn't
+    have. This rule is deliberately narrow: a hand-rolled string-split/replace
+    host extraction IS itself the 'different, less careful implementation'
+    the control warns about — it mishandles userinfo (evil.com@allowed.com),
+    IPv6 literals, and case, exactly the shapes real SSRF/RFI allowlist-bypass
+    bugs exploit. See HYBRID_ATTESTATION_ELIGIBLE_CONTROLS in asvs_service.py:
+    a confirmed hit fails the control outright, but its absence never passes
+    it."""
+
+    RULE = 'MANUAL_URL_HOST_PARSING'
+    VULNERABLE = [
+        ("host = url.split('://')[1].split('/')[0]", "classic hand-rolled host extraction via split"),
+        ("const host = target.split('://')[1].split('/')[0];", "JS: identical split-based extraction"),
+        ("stripped = url.replace('http://', '').replace('https://', '')", "manual scheme-stripping via chained replace"),
+    ]
+    SAFE = [
+        ("parsed = urlparse(url)\nhost = parsed.hostname", "proper stdlib URL parser"),
+        ("const u = new URL(url);\nconst host = u.hostname;", "JS: proper URL constructor"),
+        ("parts = path.split('/')", "unrelated split — not on the URL scheme separator"),
+    ]
+
+    @pytest.mark.parametrize("code,desc", VULNERABLE)
+    def test_vulnerable(self, code, desc): assert fires(self.RULE, code), desc
+
+    @pytest.mark.parametrize("code,desc", SAFE)
+    def test_safe(self, code, desc): assert not fires(self.RULE, code), desc
+
+
+class TestMultiTableWriteWithoutTransaction:
+    """V2.3.3 ('a business transaction and its writes are atomic') stays
+    manual_attestation for the pass case — whether THIS particular
+    transaction needed atomicity is a business judgment no scanner can make,
+    and confirming a transaction wrapper that IS present is used correctly
+    needs a human. This rule is deliberately narrow: clustered DB writes with
+    zero visible transaction boundary anywhere in the file is always at
+    least a partial-failure risk, regardless of business intent. See
+    HYBRID_ATTESTATION_ELIGIBLE_CONTROLS in asvs_service.py: a confirmed hit
+    fails the control outright, but its absence never passes it.
+
+    Uses the whole-file `sanitizers` list to downgrade (not suppress) when a
+    transaction wrapper is named anywhere in the file — see
+    TestMultiTableWriteWithoutTransactionSanitizerDowngrade in
+    test_redos_regex_patterns.py for why this rule deliberately avoids an
+    inline lookahead."""
+
+    RULE = 'MULTI_TABLE_WRITE_WITHOUT_TRANSACTION'
+    VULNERABLE = [
+        ("db.session.add(order)\ndb.session.add(inventory_row)\ndb.session.commit()", "SQLAlchemy: two adds with no transaction boundary"),
+        ("orders.objects.create(**data)\ninventory.objects.update(qty=F('qty') - 1)", "Django ORM: create + update, no transaction.atomic"),
+        ("INSERT INTO orders (id) VALUES (1);\nUPDATE inventory SET qty = qty - 1 WHERE id = 2;", "raw SQL: two statements, no BEGIN/COMMIT"),
+        ("await db.collection('orders').insertOne(order);\nawait db.collection('inventory').updateOne(filter, update);", "Mongo: insertOne + updateOne, no session transaction"),
+    ]
+    SAFE = [
+        ("db.session.add(order)\ndb.session.commit()", "a single write — nothing to be inconsistent with"),
+        ("def render_page():\n    return template.save(output_path)", "unrelated .save() call, not a DB write cluster"),
+    ]
+
+    @pytest.mark.parametrize("code,desc", VULNERABLE)
+    def test_vulnerable(self, code, desc): assert fires(self.RULE, code), desc
+
+    @pytest.mark.parametrize("code,desc", SAFE)
+    def test_safe(self, code, desc): assert not fires(self.RULE, code), desc
+
+
+class TestSessionTokenNoExpiryConfigured:
+    """V7.3.1's compliant-polarity SESSION_INACTIVITY_TIMEOUT_MARKER only
+    proves a timeout mechanism was found, never that one is missing. This
+    is a genuine vulnerable-polarity companion: an *explicit* no-expiry
+    value (None/0/-1/Infinity/null) is a positive anti-pattern, not an
+    inference from the marker rule simply not firing (which just as often
+    means the timeout is configured under a name this rule doesn't know)."""
+
+    RULE = 'SESSION_TOKEN_NO_EXPIRY_CONFIGURED'
+    VULNERABLE = [
+        ("PERMANENT_SESSION_LIFETIME = None", "Flask session lifetime explicitly disabled"),
+        ("res.cookie('session', token, { maxAge: -1 })", "cookie maxAge explicitly negative"),
+        ("res.cookie('session', token, { expires: Infinity })", "cookie expires explicitly infinite"),
+    ]
+    SAFE = [
+        ("PERMANENT_SESSION_LIFETIME = timedelta(minutes=30)", "a real, bounded lifetime is configured"),
+        ("res.cookie('session', token, { maxAge: 1800000 })", "a real, bounded maxAge is configured"),
+    ]
+
+    @pytest.mark.parametrize("code,desc", VULNERABLE)
+    def test_vulnerable(self, code, desc): assert fires(self.RULE, code), desc
+
+    @pytest.mark.parametrize("code,desc", SAFE)
+    def test_safe(self, code, desc): assert not fires(self.RULE, code), desc

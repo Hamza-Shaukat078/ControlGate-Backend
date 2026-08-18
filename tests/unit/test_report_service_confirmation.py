@@ -26,8 +26,8 @@ async def _seed_hybrid_scan(db, scan_id="scan-hybrid-report"):
         "input_type": "REPOSITORY",
         "summary": {
             "status": "COMPLETED", "input_type": "REPOSITORY",
-            "total_files": 1, "files_scanned": 1, "vulnerabilities_found": 2,
-            "by_severity": {"critical": 0, "high": 2, "medium": 0, "low": 0},
+            "total_files": 1, "files_scanned": 1, "vulnerabilities_found": 3,
+            "by_severity": {"critical": 0, "high": 3, "medium": 0, "low": 0},
             "duration_seconds": 5.0, "created_at": "2026-01-01T00:00:00",
             "completed_at": "2026-01-01T00:00:05",
             "vulnerabilities": [
@@ -40,6 +40,11 @@ async def _seed_hybrid_scan(db, scan_id="scan-hybrid-report"):
                     "id": "vuln-coarse", "type": "SQL_INJECTION", "severity": "high",
                     "asvs_controls": ["V5.3.4"], "location": {"file": "db.py", "start_line": 20, "end_line": 20},
                     "dynamic_confirmed": True,
+                },
+                {
+                    "id": "vuln-contradicted", "type": "OPEN_REDIRECT", "severity": "high", "confidence": 0.4,
+                    "asvs_controls": ["V3.7.3"], "location": {"file": "views.py", "start_line": 30, "end_line": 30},
+                    "dynamic_contradicted": True,
                 },
             ],
             "dynamic_findings": [
@@ -106,6 +111,24 @@ async def test_csv_marks_corroborating_dynamic_finding():
 
 
 @pytest.mark.asyncio
+async def test_csv_marks_dynamic_contradicted_vulnerability():
+    # Phase 5.2 — reverse bridge: a distinct, de-emphasized tier, never
+    # confused with the two positive-confirmation tiers above.
+    db = AsyncMongoMockClient()["test"]
+    scan_id = await _seed_hybrid_scan(db)
+    svc = ReportService(db)
+
+    csv_content = await svc.export_csv(scan_id, USER)
+
+    assert "Live-tested, not reproduced" in csv_content
+    reader = csv.DictReader(io.StringIO(csv_content))
+    row = next(r for r in reader if r["Type"] == "OPEN_REDIRECT")
+    assert "Live-tested, not reproduced" in row["Confirmation"]
+    assert "Confirmed live" not in row["Confirmation"]
+    assert "Corroborated" not in row["Confirmation"]
+
+
+@pytest.mark.asyncio
 async def test_csv_has_no_confirmation_for_unconfirmed_finding():
     db = AsyncMongoMockClient()["test"]
     scan_id = "scan-unconfirmed"
@@ -135,6 +158,36 @@ async def test_csv_has_no_confirmation_for_unconfirmed_finding():
 async def test_export_pdf_does_not_crash_with_confirmation_fields():
     db = AsyncMongoMockClient()["test"]
     scan_id = await _seed_hybrid_scan(db)
+    svc = ReportService(db)
+
+    pdf_bytes = await svc.export_pdf(scan_id, USER)
+
+    assert pdf_bytes is not None
+    assert pdf_bytes[:4] == b"%PDF"
+
+
+@pytest.mark.asyncio
+async def test_export_pdf_does_not_crash_with_only_contradicted_findings():
+    # The Live Confirmation Summary block must still render (and not
+    # divide-by-zero/crash) when contradicted_count is the *only* nonzero
+    # count — bridge_confirmed_count and coarse_confirmed_count both 0.
+    db = AsyncMongoMockClient()["test"]
+    scan_id = "scan-only-contradicted"
+    await db.scans.insert_one({
+        "scan_id": scan_id, "user_id": "507f1f77bcf86cd799439011", "state": "COMPLETED",
+        "summary": {
+            "status": "COMPLETED", "input_type": "REPOSITORY",
+            "total_files": 1, "files_scanned": 1, "vulnerabilities_found": 1,
+            "by_severity": {"critical": 0, "high": 1, "medium": 0, "low": 0},
+            "duration_seconds": 1.0, "created_at": "2026-01-01T00:00:00",
+            "vulnerabilities": [{
+                "id": "vuln-only-contradicted", "type": "OPEN_REDIRECT", "severity": "high",
+                "confidence": 0.4, "asvs_controls": ["V3.7.3"],
+                "location": {"file": "views.py", "start_line": 5, "end_line": 5},
+                "dynamic_contradicted": True,
+            }],
+        },
+    })
     svc = ReportService(db)
 
     pdf_bytes = await svc.export_pdf(scan_id, USER)

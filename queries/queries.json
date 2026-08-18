@@ -62,7 +62,16 @@
       "parameterized",
       "escape",
       "quote",
-      "prepare"
+      "prepare",
+      "bindparam",
+      "bindparams",
+      ".filter(",
+      "objects.filter",
+      "objects.get",
+      "objects.exclude",
+      "query.filter",
+      "psycopg2.sql.SQL",
+      "psycopg2.sql.Identifier"
     ],
     "confidence": "high",
     "regex_patterns": [
@@ -156,8 +165,11 @@
     ],
     "sanitizers": [
       "shlex.quote",
+      "shlex.split",
+      "pipes.quote",
       "shell=False",
-      "allowlist"
+      "allowlist",
+      "subprocess.list2cmdline"
     ],
     "confidence": "high",
     "regex_patterns": [
@@ -306,7 +318,13 @@
       "escape",
       "html.escape",
       "DOMPurify",
-      "sanitize"
+      "sanitize",
+      "markupsafe",
+      "MarkupSafe",
+      "escapeHtml",
+      "he.encode",
+      "lodash.escape",
+      "_.escape"
     ],
     "confidence": "medium",
     "regex_patterns": [
@@ -398,7 +416,10 @@
       "path.resolve",
       "allowlist",
       "path.normalize",
-      "safe_join"
+      "safe_join",
+      "secure_filename",
+      "werkzeug.utils.secure_filename",
+      "os.path.realpath"
     ],
     "confidence": "high",
     "regex_patterns": [
@@ -761,6 +782,32 @@
       "V13.4.2"
     ]
   },
+  "AUTH_BACKDOOR_BYPASS": {
+    "rule_id": "AUTH_BACKDOOR_BYPASS",
+    "name": "Undocumented or Backdoor Authentication Pathway",
+    "owasp": "A07:2021-Identification and Authentication Failures",
+    "cwe": "CWE-288",
+    "description": "A hardcoded master/admin credential check, a DEBUG- or environment-variable-gated authentication skip, or a magic bypass header/token found near authentication code — a heuristic assist for V6.3.4, not proof of absence. A hit is real, independent evidence of a backdoor pathway; a clean scan does NOT prove no undocumented pathway exists (see V6.3.4's own verification steps: a full authentication-flow audit is still required).",
+    "severity": "critical",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "regex_patterns": [
+      "(?i)(bypass_auth|skip_auth|auth_bypass|disable_auth|debug_login|master_password|master_key|god_mode|backdoor)\\b",
+      "(username|user)\\s*==\\s*['\"]admin['\"]\\s*(and|&&)\\s*(password|pass|pwd)\\s*==\\s*['\"][^'\"]{3,}['\"]",
+      "(?i)headers?(\\.get\\(|\\[)['\"]x-(debug|admin)-(auth|override|bypass)['\"]",
+      "(?i)(os\\.(environ|getenv)|process\\.env)\\s*[.(\\[]\\s*['\"]?(BYPASS_AUTH|SKIP_AUTH|DISABLE_AUTH|AUTH_BYPASS)['\"]?"
+    ],
+    "confidence": "medium",
+    "asvs_controls": [
+      "V6.3.4"
+    ]
+  },
   "LDAP_INJECTION": {
     "rule_id": "LDAP_INJECTION",
     "name": "LDAP Injection",
@@ -938,7 +985,10 @@
     ],
     "sanitizers": [
       "escape",
-      "autoescape"
+      "autoescape",
+      "select_autoescape",
+      "autoescape=True",
+      "jinja2.utils.escape"
     ],
     "confidence": "high",
     "regex_patterns": [
@@ -981,7 +1031,10 @@
     ],
     "sanitizers": [
       "sanitize",
-      "validate"
+      "validate",
+      "sanitizeFilter",
+      "mongo-sanitize",
+      "express-mongo-sanitize"
     ],
     "confidence": "medium",
     "regex_patterns": [
@@ -1508,7 +1561,7 @@
     "regex_patterns": [
       "(?i)\\b(?:zipfile|tarfile)\\.(?:extract|extractall)\\s*\\(",
       "(?i)\\.extractall\\s*\\(",
-      "(?i)\\b(?:os\\.path\\.join|path\\.join)\\s*\\([^\\n)]*(?:member\\.(?:filename|name)|entry\\.(?:filename|name)|file\\.(?:filename|name)|name)"
+      "(?i)\\b(?:os\\.path\\.join|path\\.join)\\s*\\([^\\n)]*(?:member\\.(?:filename|name)|entry\\.(?:filename|name)|file\\.(?:filename|name)|\\bname\\b)"
     ],
     "asvs_controls": [
       "V5.2.3",
@@ -1640,7 +1693,6 @@
     "sources": [
       "password",
       "secret",
-      "token",
       "api_key",
       "private_key"
     ],
@@ -1657,9 +1709,9 @@
     "sanitizers": [],
     "confidence": "medium",
     "regex_patterns": [
-      "jsonify\\s*\\([^)]*(?:password|token|secret|key)",
-      "json\\.dumps\\s*\\([^)]*(?:password|token|secret|key)",
-      "(?:password|secret|token|api_key)\\s*=\\s*['\\\"][^'\\\"{}\\n\\r]{4,}['\\\"]"
+      "jsonify\\s*\\([^)]*(?:password|secret|key)",
+      "json\\.dumps\\s*\\([^)]*(?:password|secret|key)",
+      "(?:password|secret|api_key)\\s*=\\s*['\\\"][^'\\\"{}\\n\\r]{4,}['\\\"]"
     ],
     "asvs_controls": [
       "V15.3.1"
@@ -1849,6 +1901,22 @@
     "file_patterns": [
       "(?i)\\.(py|js|ts|tsx)$"
     ],
+    "sanitizers": [
+      "authenticate",
+      "authorize",
+      "requireAuth",
+      "require_auth",
+      "isAuthenticated",
+      "is_authenticated",
+      "requireAdmin",
+      "require_admin",
+      "isAdmin",
+      "is_admin",
+      "login_required",
+      "permission_required",
+      "IsAdminUser",
+      "IsAuthenticated"
+    ],
     "confidence": "medium",
     "asvs_controls": [
       "V8.2.1"
@@ -1966,7 +2034,7 @@
     "patterns": [],
     "regex_patterns": [
       "(?i)\\\"(admin|root|test)\\\"\\s*:\\s*\\\"(admin|root|password|1234|123456)\\\"",
-      "(?i)(admin|root)\\s*[:=]\\s*[\\\"\\'](admin|root|password|1234|123456)[\\\"\\']",
+      "(?i)(admin|root)\\s*[:=]\\s*[\\\"\\'](password|1234|123456)[\\\"\\']",
       "(?i)(default_|admin_)?(admin|root)_?(password|user|username)\\s*=\\s*[\"\\'](admin|root|password|1234|123456)[\"\\']"
     ],
     "file_patterns": [
@@ -3075,7 +3143,8 @@
       "typescript"
     ],
     "asvs_controls": [
-      "V9.2.1"
+      "V9.2.1",
+      "V10.3.2"
     ],
     "sources": [],
     "sinks": [],
@@ -3232,7 +3301,8 @@
     ],
     "asvs_controls": [
       "V9.2.3",
-      "V10.3.1"
+      "V10.3.1",
+      "V10.3.2"
     ]
   },
   "WEAK_PASSWORD_HASHING": {
@@ -5024,7 +5094,7 @@
     "regex_patterns": [
       "create_refresh_token\\s*\\((?![^)]*expir)[^)]*\\)",
       "refresh_tokens?\\.(?:insert(?:One)?|create)\\s*\\((?![\\s\\S]{0,200}expir)[\\s\\S]{0,200}\\)",
-      "RefreshToken\\s*\\(\\s*(?:token|user)[^)]*\\)(?![\\s\\S]{0,150}expir)",
+      "new\\s+RefreshToken\\s*\\((?![^)]*expir)\\s*(?:token|user)[^)]*\\)",
       "INSERT\\s+INTO\\s+refresh_tokens\\s*\\((?![^)]*expir)[^)]*\\)"
     ],
     "asvs_controls": [
@@ -6725,5 +6795,151 @@
     "asvs_controls": [
       "V2.2.1"
     ]
+  },
+  "AUTH_FAILURE_SILENTLY_SWALLOWED": {
+    "rule_id": "AUTH_FAILURE_SILENTLY_SWALLOWED",
+    "name": "Authentication/Authorization Failure Silently Swallowed",
+    "owasp": "A09",
+    "cwe": "CWE-778",
+    "description": "A bare except/empty catch block sits directly next to an authentication/authorization-denial branch (login, logout, authenticate, authorize, permission check, 401/403) with no logging inside it -- the security-relevant failure is silently discarded rather than recorded (controls V16.3.1/V16.3.2). Unlike the compliant-polarity AUTH_OPERATION_LOGGED_MARKER/AUTHZ_DENIAL_LOGGED_MARKER (which only prove logging is present when it's found), this rule flags a positive, narrow anti-pattern -- an explicitly empty error handler -- rather than inferring absence from a rule simply not firing.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "(?:login|logout|authenticate|authorize|permission|forbidden|401|403)[\\s\\S]{0,200}except\\s*(?:\\([^)]*\\))?\\s*:\\s*\\n\\s*pass\\b",
+      "except\\s*(?:\\([^)]*\\))?\\s*:\\s*\\n\\s*pass\\b[\\s\\S]{0,200}(?:login|logout|authenticate|authorize|permission|forbidden|401|403)",
+      "(?:login|logout|authenticate|authorize|permission|forbidden|401|403)[\\s\\S]{0,200}catch\\s*\\([^)]*\\)\\s*\\{\\s*\\}",
+      "catch\\s*\\([^)]*\\)\\s*\\{\\s*\\}[\\s\\S]{0,200}(?:login|logout|authenticate|authorize|permission|forbidden|401|403)"
+    ],
+    "asvs_controls": [
+      "V16.3.1",
+      "V16.3.2"
+    ],
+    "finding_polarity": "vulnerable"
+  },
+  "SESSION_TOKEN_NO_EXPIRY_CONFIGURED": {
+    "rule_id": "SESSION_TOKEN_NO_EXPIRY_CONFIGURED",
+    "name": "Session/Cookie Explicitly Configured With No Expiry",
+    "owasp": "A07",
+    "cwe": "CWE-613",
+    "description": "A session lifetime or cookie maxAge/expires setting is explicitly configured to never expire (None/0/-1/Infinity/null), rather than simply absent (control V7.3.1). A narrow, positive anti-pattern -- an explicit no-expiry value -- not an inference from SESSION_INACTIVITY_TIMEOUT_MARKER (compliant-polarity) failing to fire, which just as often means the timeout is configured somewhere this rule's keyword list doesn't recognize.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "low",
+    "regex_patterns": [
+      "PERMANENT_SESSION_LIFETIME\\s*=\\s*(?:None|0)\\b",
+      "maxAge\\s*:\\s*(?:0|-1|Infinity|null)\\b",
+      "expires\\s*:\\s*(?:null|Infinity|0)\\b"
+    ],
+    "asvs_controls": [
+      "V7.3.1"
+    ],
+    "finding_polarity": "vulnerable"
+  },
+  "DOUBLE_DECODE_CANONICALIZATION": {
+    "rule_id": "DOUBLE_DECODE_CANONICALIZATION",
+    "name": "Untrusted Input Decoded/Canonicalized More Than Once",
+    "owasp": "A03",
+    "cwe": "CWE-179",
+    "description": "A decode/unescape/normalize call wraps the result of another decode call on the same value (e.g. unquote(unquote(x)), decodeURIComponent(decodeURIComponent(x))) -- the classic double-decoding shape behind path-traversal and filter-bypass payloads like %252e%252e%252f, which only becomes ../../ after a SECOND decode a validation check upstream never saw. This is deliberately narrow: it only catches the one unambiguous slice of V1.1.1 -- decode wrapping decode, directly, in the same expression. It does NOT attempt to prove the broader property (decode-then-validate ordering across separate statements, or across framework-level implicit decoding this scanner has no visibility into) -- that requires whole-pipeline reasoning no static pattern can soundly assert, which is exactly why V1.1.1 stays manual_attestation for the pass case (see HYBRID_ATTESTATION_ELIGIBLE_CONTROLS in asvs_service.py). A confirmed hit here is real, independent evidence of a violation; its absence proves nothing.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?i)\\b(?:urllib\\.parse\\.unquote(?:_plus)?|unquote(?:_plus)?|html\\.unescape|unescape|base64\\.b64decode|b64decode|codecs\\.decode|unicodedata\\.normalize|decodeURIComponent|decodeURI|atob)\\s*\\(\\s*(?:urllib\\.parse\\.unquote(?:_plus)?|unquote(?:_plus)?|html\\.unescape|unescape|base64\\.b64decode|b64decode|codecs\\.decode|unicodedata\\.normalize|decodeURIComponent|decodeURI|atob)\\s*\\("
+    ],
+    "asvs_controls": [
+      "V1.1.1"
+    ],
+    "finding_polarity": "vulnerable"
+  },
+  "MANUAL_URL_HOST_PARSING": {
+    "rule_id": "MANUAL_URL_HOST_PARSING",
+    "name": "URL Host Extracted Via Manual String Splitting Instead Of A URL Parser",
+    "owasp": "A03",
+    "cwe": "CWE-20",
+    "description": "The scheme/host is pulled out of a URL string by hand -- splitting on the literal \"://\" or stripping \"http(s)://\" with .replace() -- instead of a real URL-parsing library (urlparse/urlsplit, new URL(), url.parse()). This is deliberately narrow: it only catches the one unambiguous slice of V1.5.3 that's directly readable from one file -- a hand-rolled parser is intrinsically the 'different, less careful implementation' the control warns about, mishandling exactly the cases (userinfo like evil.com@allowed.com, IPv6 literals, mixed case, missing/extra slashes) that real SSRF/RFI allowlist-bypass CVEs have exploited for years. It does NOT attempt to prove two parsers actually disagree at runtime, or compare parsers across service boundaries -- that needs differential fuzzing or cross-service visibility this scanner doesn't have, which is why V1.5.3 stays manual_attestation for the pass case (see HYBRID_ATTESTATION_ELIGIBLE_CONTROLS in asvs_service.py). A confirmed hit here is real, independent evidence of the anti-pattern; its absence proves nothing about a second parser this scanner can't see.",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [],
+    "confidence": "medium",
+    "regex_patterns": [
+      "\\.split\\(\\s*['\"]://['\"]\\s*\\)",
+      "\\.replace\\(\\s*['\"]https?://['\"]\\s*,\\s*['\"]{2}\\s*\\)"
+    ],
+    "asvs_controls": [
+      "V1.5.3"
+    ],
+    "finding_polarity": "vulnerable"
+  },
+  "MULTI_TABLE_WRITE_WITHOUT_TRANSACTION": {
+    "rule_id": "MULTI_TABLE_WRITE_WITHOUT_TRANSACTION",
+    "name": "Multiple Database Writes With No Transaction Boundary",
+    "owasp": "A04",
+    "cwe": "CWE-662",
+    "description": "Two or more database write operations (raw SQL INSERT/UPDATE/DELETE, Mongo insert/update/delete, SQLAlchemy session.add, Django .objects.create/.update, Sequelize .bulkCreate/.destroy) appear within a short span of each other with nothing in the surrounding code naming an actual transaction boundary. This is deliberately narrow: it only catches the unambiguous absence case for V2.3.3 -- clustered multi-write code with zero visible transactional protection is always at least a partial-failure risk, regardless of whether THIS business transaction actually needed atomicity (that's a judgment call no scanner can make). It does NOT attempt to prove a transaction wrapper that IS present is used correctly, or that these specific writes were meant to be one business transaction -- see HYBRID_ATTESTATION_ELIGIBLE_CONTROLS in asvs_service.py; V2.3.3 stays manual_attestation for the pass case. Uses the whole-file sanitizers list (not an inline lookahead) to downgrade confidence when a transaction wrapper is named anywhere in the file, before or after the flagged writes -- seeded by a real ReDoS regression from exactly the inline-lookahead-before-any-anchor shape (see test_redos_regex_patterns.py) and the same false positive it caused (a guard appearing before, not after, the flagged call).",
+    "severity": "medium",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript"
+    ],
+    "sources": [],
+    "sinks": [],
+    "patterns": [],
+    "sanitizers": [
+      "transaction.atomic",
+      "session.begin_nested",
+      "db.session.begin",
+      "with transaction",
+      "@transactional",
+      "connection.transaction",
+      "sequelize.transaction",
+      "knex.transaction",
+      "runTransaction",
+      "BEGIN TRANSACTION",
+      "START TRANSACTION",
+      "session.start_transaction",
+      "with_transaction"
+    ],
+    "confidence": "medium",
+    "regex_patterns": [
+      "(?:INSERT\\s+INTO|UPDATE\\s+\\w+\\s+SET|DELETE\\s+FROM|\\.insert(?:_one|_many|One|Many)?\\(|\\.update(?:_one|_many|One|Many)?\\(|\\.delete(?:_one|_many|One|Many)?\\(|\\.objects\\.create\\(|\\.objects\\.update\\(|session\\.add\\(|db\\.session\\.add\\(|\\.bulkCreate\\(|\\.destroy\\()[\\s\\S]{1,200}?(?:INSERT\\s+INTO|UPDATE\\s+\\w+\\s+SET|DELETE\\s+FROM|\\.insert(?:_one|_many|One|Many)?\\(|\\.update(?:_one|_many|One|Many)?\\(|\\.delete(?:_one|_many|One|Many)?\\(|\\.objects\\.create\\(|\\.objects\\.update\\(|session\\.add\\(|db\\.session\\.add\\(|\\.bulkCreate\\(|\\.destroy\\()"
+    ],
+    "asvs_controls": [
+      "V2.3.3"
+    ],
+    "finding_polarity": "vulnerable"
   }
 }

@@ -79,6 +79,7 @@ async def run_ssrf_probe(
             url=target_url, method="GET",
             note="No candidate URL-shaped parameter was recognized by the target (no confirmed endpoint)",
             confidence=0.2,
+            proof={"candidate_params_tried": list(params_to_try)},
         )
 
     if callback_wait_seconds:
@@ -88,6 +89,10 @@ async def run_ssrf_probe(
         hits = collaborator.hits_for(token)
         if hits:
             hit = hits[0]
+            callback_url = collaborator.callback_url(token)
+            reproduction = (
+                f"curl -G '{target_url}' --data-urlencode '{param}={callback_url}'"
+            )
             return DynamicFinding(
                 control_id=control_id, verdict=Verdict.FAIL, rule_id=RULE_ID, severity=severity,
                 url=target_url, method="GET",
@@ -96,6 +101,20 @@ async def run_ssrf_probe(
                      f"({len(hits)} callback(s) total) — the target performs server-side requests to "
                      f"user-controlled URLs",
                 confidence=0.85,
+                evidence_type="oob_callback",
+                payload=session.redact(callback_url),
+                reproduction=session.redact(reproduction),
+                # The out-of-band callback itself *is* the proof for SSRF —
+                # unlike a response-diff check, there's no meaningful "body
+                # of the response the target sent back" to show; what
+                # matters is that the target's own infrastructure reached
+                # back out to us, which these fields are the receipt for.
+                proof={
+                    "callback_param": param,
+                    "callback_source_ip": hit.remote_addr,
+                    "callback_count": len(hits),
+                    "callback_received_at": hit.received_at,
+                },
             )
 
     return DynamicFinding(
@@ -105,4 +124,15 @@ async def run_ssrf_probe(
              f"{callback_wait_seconds}s — either the target doesn't perform server-side fetches from "
              f"these params, or the fetch happens somewhere the collaborator isn't reachable from",
         confidence=0.4,
+        evidence_type="oob_callback",
+        # No single response "proves" a negative SSRF result the way a
+        # response snippet does for other checks — the real evidence here
+        # is which params were actually reachable and given a live
+        # callback URL to fetch, and that the wait window fully elapsed
+        # with zero hits on any of them.
+        proof={
+            "candidate_params_tested": list(tokens_by_param.keys()),
+            "callback_wait_seconds": callback_wait_seconds,
+            "total_callbacks_received": 0,
+        },
     )

@@ -62,6 +62,7 @@ class ReportService:
             "dependency_findings": summary.get("dependency_findings"),
             "dependency_control_result": summary.get("dependency_control_result"),
             "capability_findings": summary.get("capability_findings"),
+            "dynamic_probe_findings": summary.get("dynamic_probe_findings"),
             "dynamic_findings": summary.get("dynamic_findings"),
             "discovered_forms": summary.get("discovered_forms"),
         }
@@ -118,6 +119,7 @@ class ReportService:
             "config_findings": summary.config_findings or [],
             "dependency_findings": summary.dependency_findings or [],
             "capability_findings": summary.capability_findings or [],
+            "dynamic_probe_findings": summary.dynamic_probe_findings or [],
             "dynamic_findings": summary.dynamic_findings or [],
             "discovered_forms": summary.discovered_forms or [],
             "created_at": summary.created_at,
@@ -132,15 +134,31 @@ class ReportService:
 
     @staticmethod
     def _confirmation_label(vuln: dict) -> str:
-        """Distinguishes the two dynamic-confirmation tiers scan_service.py
-        sets on a static finding (see _run_repository_scan's hybrid block):
+        """Distinguishes the dynamic-confirmation tiers scan_service.py sets
+        on a static finding (see _run_repository_scan's hybrid block):
         bridge_confirmed is precise (this exact route was re-tested live via
         app/domain/analysis/dast/bridge.py), plain dynamic_confirmed is only
         coarse correlation (some dynamic finding happened to share the same
         ASVS control). Reporting them identically would overstate the
-        coarse tier's confidence."""
+        coarse tier's confidence. Within bridge_confirmed, bridge_verdict
+        further distinguishes CONFIRMED (impact actually reproduced — timing
+        delay measured, OOB callback received, etc.) from a plain FAIL
+        (heuristic signal only, e.g. a response diff)."""
         if vuln.get('bridge_confirmed'):
+            if vuln.get('bridge_verdict') == 'confirmed':
+                return "CONFIRMED live — this exact route was re-tested and impact was reproduced"
             return "Confirmed live — this exact route was re-tested and reproduced"
+        if vuln.get('dynamic_contradicted'):
+            # Phase 5.2 — reverse bridge: the same route re-tested clean.
+            # Distinct from (and checked ahead of) the coarse dynamic_confirmed
+            # branch below — a precise same-route PASS is more informative
+            # than a coarse cross-route correlation even though it points the
+            # opposite direction, and scan_service.py never sets both
+            # bridge_confirmed and dynamic_contradicted on the same finding.
+            return (
+                "Live-tested, not reproduced — this exact route was re-tested and passed; confidence "
+                "lowered (may be a false positive, or the check simply couldn't trigger it)"
+            )
         if vuln.get('dynamic_confirmed'):
             return "Corroborated — the dynamic scan flagged the same ASVS control elsewhere"
         return ""
@@ -259,6 +277,64 @@ class ReportService:
             story.append(severity_table)
             story.append(Spacer(1, 0.3 * inch))
 
+            # ASVS Compliance by Level — the PDF had no compliance-level
+            # content at all before this (only vulnerability/dependency/
+            # dynamic-finding sections); asvs_service.py already computes
+            # all three ASVS levels (ASVS_LEVELS = ["L1", "L2", "L3"]) for
+            # the on-screen report, so this reuses the exact same call
+            # rather than recomputing anything. L2/L3 totals are always >=
+            # L1's (each level is a strict superset of the one below —
+            # _level_includes) and their pct is typically lower — expected,
+            # not a bug: more controls apply, not fewer of the same ones
+            # passing.
+            try:
+                from app.services.asvs_service import ASVSService
+                compliance = await ASVSService(self.db).get_compliance_summary(scan_id, user=user)
+            except Exception as exc:
+                logger.warning(f"Compliance summary unavailable for PDF (non-blocking): {exc}")
+                compliance = None
+
+            if compliance and compliance.get("levels"):
+                story.append(Paragraph("ASVS Compliance by Level", styles['Heading2']))
+                story.append(Spacer(1, 0.1 * inch))
+
+                level_labels = {"L1": "Level 1 (Opportunistic)", "L2": "Level 2 (Standard)", "L3": "Level 3 (Advanced)"}
+                # Overall first — every control in the catalog counted once,
+                # no level filtering (see asvs_service.py's "overall" entry).
+                # The single headline number; L1/L2/L3 below are the breakdown.
+                overall = compliance["levels"].get("overall", {})
+                level_data = [
+                    ['Level', 'Compliance', 'Controls Passing'],
+                    ['Overall (out of 100)', f"{overall.get('pct', 0)} / 100", f"{overall.get('passed', 0)} / {overall.get('total', 0)}"],
+                ]
+                for level_id in ("L1", "L2", "L3"):
+                    lvl = compliance["levels"].get(level_id, {})
+                    level_data.append([
+                        level_labels.get(level_id, level_id),
+                        f"{lvl.get('pct', 0)}%",
+                        f"{lvl.get('passed', 0)} / {lvl.get('total', 0)}",
+                    ])
+
+                level_table = Table(level_data, colWidths=[2.5*inch, 1.5*inch, 2*inch])
+                level_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 10),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                    ('BACKGROUND', (0, 1), (-1, 1), colors.beige),
+                ]))
+                story.append(level_table)
+                story.append(Paragraph(
+                    "<i>Each level is a superset of the one below it — a lower L3 percentage than L1 means "
+                    "more controls apply, not that fewer of the same ones are passing.</i>",
+                    styles['Normal'],
+                ))
+                story.append(Spacer(1, 0.3 * inch))
+
             # Live Confirmation Summary — only meaningful for hybrid scans
             # (dynamic_findings present); tells the reader up front how many
             # static findings were actually re-tested live vs. only
@@ -272,7 +348,16 @@ class ReportService:
                     1 for v in summary.vulnerabilities
                     if v.get('dynamic_confirmed') and not v.get('bridge_confirmed')
                 )
-                if bridge_confirmed_count or coarse_confirmed_count:
+                # Phase 5.2 — reverse bridge: a distinct, de-emphasized tier.
+                # Counted separately from (and never overlapping with) the
+                # two positive-confirmation tiers above — scan_service.py
+                # never sets dynamic_contradicted on a bridge_confirmed
+                # finding — so this line reads as "here's what live-tested
+                # clean" rather than competing with "here's what's confirmed".
+                contradicted_count = sum(
+                    1 for v in summary.vulnerabilities if v.get('dynamic_contradicted')
+                )
+                if bridge_confirmed_count or coarse_confirmed_count or contradicted_count:
                     story.append(Paragraph("Live Confirmation Summary", styles['Heading2']))
                     story.append(Spacer(1, 0.1 * inch))
                     confirm_text = ""
@@ -285,6 +370,11 @@ class ReportService:
                         confirm_text += (
                             f"<b>{coarse_confirmed_count}</b> finding(s) corroborated "
                             f"— dynamic scan flagged the same ASVS control elsewhere<br/>"
+                        )
+                    if contradicted_count:
+                        confirm_text += (
+                            f"<i>{contradicted_count} finding(s) live-tested, not reproduced — exact route "
+                            f"re-tested and passed; confidence lowered, not dropped</i><br/>"
                         )
                     story.append(Paragraph(confirm_text, styles['Normal']))
                     story.append(Spacer(1, 0.2 * inch))
@@ -300,7 +390,8 @@ class ReportService:
                     # Title with severity
                     vuln_type = xe(vuln.get('type', 'Unknown Vulnerability'))
                     severity = xe(vuln.get('severity', 'unknown').upper())
-                    vuln_title = f"{idx}. {vuln_type} - {severity}"
+                    score_label = f" — Est. CVSS {vuln.get('cvss_score')}" if isinstance(vuln.get('cvss_score'), (int, float)) else ""
+                    vuln_title = f"{idx}. {vuln_type} - {severity}{xe(score_label)}"
                     story.append(Paragraph(vuln_title, styles['Heading3']))
 
                     # Basic info
@@ -317,6 +408,13 @@ class ReportService:
                     info_text = f"<b>Location:</b> {file_path} (Lines {start_line}-{end_line})<br/>"
                     info_text += f"<b>CWE:</b> {xe(vuln.get('cwe', 'N/A'))}<br/>"
                     info_text += f"<b>OWASP:</b> {xe(vuln.get('owasp', 'N/A'))}<br/>"
+                    # "Est." because this is pipeline.py's severity+exploitability
+                    # heuristic (_compute_cvss_score), not an NVD lookup — a static
+                    # finding has no CVE to look up. Labeled distinctly from the
+                    # dependency section's real NVD CVSS below so neither reads as
+                    # more/less authoritative than it actually is.
+                    if isinstance(vuln.get('cvss_score'), (int, float)):
+                        info_text += f"<b>Est. CVSS:</b> {vuln.get('cvss_score')}<br/>"
                     info_text += f"<b>Confidence:</b> {confidence_pct}<br/>"
                     confirmation = self._confirmation_label(vuln)
                     if confirmation:
@@ -471,6 +569,60 @@ class ReportService:
                         info_text += (
                             "<b>Corroborates:</b> A static finding flagged the same ASVS control<br/>"
                         )
+                    # CONFIRMED means the engine reproduced impact, not just a
+                    # heuristic signal — the reproduction string is the
+                    # human-pasteable receipt for that, so it's worth
+                    # surfacing even when evidence/proof are omitted for size.
+                    if finding.get('verdict') == 'confirmed':
+                        info_text += "<b>Impact reproduced:</b> yes<br/>"
+                    # payload is the actual attack value sent (e.g. the SSRF
+                    # callback URL, the SQLi boolean pair). Every check now
+                    # populates payload/proof on every verdict it reaches
+                    # (pass included — a PASS is a real tested result, not
+                    # just a claim), not only confirmed/fail, so this no
+                    # longer gates on verdict — whatever the check actually
+                    # captured is shown, whichever way it came out.
+                    if finding.get('payload'):
+                        info_text += f"<b>Payload:</b> {xe(finding.get('payload'))}<br/>"
+                    # proof is check-specific structured evidence (see
+                    # DynamicFinding's docstring) — a real response snippet
+                    # for a response-diff check, an out-of-band callback's
+                    # source IP for SSRF, timing deltas for blind SQLi.
+                    # Rendered generically (whatever keys are present)
+                    # rather than one hand-coded layout per rule_id.
+                    proof = finding.get('proof')
+                    if proof:
+                        for key, value in proof.items():
+                            if value in (None, ""):
+                                continue
+                            label = xe(str(key).replace('_', ' ').title())
+                            info_text += f"<b>{label}:</b> {xe(str(value))}<br/>"
+                    if finding.get('reproduction'):
+                        info_text += f"<b>Reproduction:</b> {xe(finding.get('reproduction'))}<br/>"
+                    story.append(Paragraph(info_text, styles['Normal']))
+                    story.append(Spacer(1, 0.2 * inch))
+
+            # Live ASVS Dynamic-Probe Checks — DynamicProbe's TLS/HTTPS/cert/
+            # HSTS/.git-exposure results (the catalog's dynamic_probe-labeled
+            # controls, plus the V3.4.1/V13.4.6 config-inspection controls
+            # that accept this as alternate evidence). Distinct from the
+            # section above: these are direct live-property checks, not
+            # payload/injection probes, and they feed ASVS verdicts directly
+            # rather than only corroborating a static finding.
+            if summary.dynamic_probe_findings:
+                story.append(Paragraph("Live ASVS Dynamic-Probe Checks", styles['Heading2']))
+                story.append(Spacer(1, 0.1 * inch))
+
+                xe = self._xe
+                for idx, finding in enumerate(summary.dynamic_probe_findings, 1):
+                    verdict = xe(str(finding.get('verdict', 'unknown')).upper())
+                    control_id = xe(finding.get('control_id', 'N/A'))
+                    finding_title = f"{idx}. {control_id} - {verdict}"
+                    story.append(Paragraph(finding_title, styles['Heading3']))
+
+                    info_text = f"<b>Note:</b> {xe(finding.get('note', 'N/A'))}<br/>"
+                    if finding.get('confidence') is not None:
+                        info_text += f"<b>Confidence:</b> {xe(finding.get('confidence'))}<br/>"
                     story.append(Paragraph(info_text, styles['Normal']))
                     story.append(Spacer(1, 0.2 * inch))
 
@@ -505,7 +657,7 @@ class ReportService:
         writer = csv.writer(output)
 
         # Header
-        writer.writerow(['Type', 'Severity', 'File', 'Line', 'Message', 'CWE', 'Confirmation'])
+        writer.writerow(['Type', 'Severity', 'File', 'Line', 'Message', 'CWE', 'Confirmation', 'Reproduction'])
 
         # Vulnerabilities
         for vuln in summary.vulnerabilities or []:
@@ -517,6 +669,7 @@ class ReportService:
                 vuln.get('message', 'No description'),
                 vuln.get('cwe', ''),
                 self._confirmation_label(vuln),
+                '',
             ])
 
         # Dynamic (DAST) findings — HTTP-shaped, not file/line-shaped, so
@@ -536,6 +689,7 @@ class ReportService:
                 finding.get('note', 'No description'),
                 '',
                 confirmation,
+                finding.get('reproduction') or '',
             ])
 
         return output.getvalue()

@@ -5,6 +5,7 @@ a scenario is a sequence of requests where later steps can depend on values
 extracted from earlier ones (e.g. a session cookie, a CSRF token) — that
 interpolation is the only thing this engine adds over run_payload_checks.
 """
+import asyncio
 import logging
 import re
 from typing import Any, Dict, Optional
@@ -54,6 +55,8 @@ def _evaluate_assertion(assertion: Assertion, response) -> bool:
         return response.status_code not in assertion.expected
     if assertion.type == "body_contains":
         return assertion.expected in response.text
+    if assertion.type == "body_not_contains":
+        return assertion.expected not in response.text
     if assertion.type == "redirect_location_contains":
         location = response.headers.get("location", "")
         return response.status_code in _REDIRECT_STATUS_CODES and assertion.expected in location
@@ -97,6 +100,9 @@ async def run_scenario(pair: DastSessionPair, scenario: Scenario, *, active_mode
                     confidence=1.0,
                 )
 
+            if step.delay_seconds:
+                await asyncio.sleep(step.delay_seconds)
+
             last_url = _interpolate(step.url, context)
             last_step = step
             kwargs: Dict[str, Any] = {"follow_redirects": step.follow_redirects}
@@ -118,6 +124,25 @@ async def run_scenario(pair: DastSessionPair, scenario: Scenario, *, active_mode
 
             for assertion in step.assertions:
                 if not _evaluate_assertion(assertion, response):
+                    # A 429 means the app's own rate limiter intercepted the
+                    # request before it ever reached the code path this
+                    # assertion is actually testing — the security question
+                    # (e.g. "does the app still honor a session after
+                    # logout?") was never answered either way. Verdict.
+                    # INCONCLUSIVE's own docstring names exactly this case
+                    # ("ambiguous/ratelimited response"); FAIL claims the
+                    # control was violated, which a rate-limit block doesn't
+                    # show. Confirmed false FAIL against a real scan: 4 of 5
+                    # LOGOUT_INVALIDATES_SESSION findings were rate-limiter
+                    # 429s, not sessions surviving logout.
+                    if response.status_code == 429:
+                        return DynamicFinding(
+                            control_id=control_id, verdict=Verdict.INCONCLUSIVE, rule_id=scenario.scenario_id,
+                            url=last_url, method=step.method, severity=scenario.severity,
+                            note="Step was rate-limited (429) before the assertion could be meaningfully "
+                                 f"evaluated: {assertion.type}",
+                            confidence=0.2,
+                        )
                     return DynamicFinding(
                         control_id=control_id, verdict=Verdict.FAIL, rule_id=scenario.scenario_id,
                         url=last_url, method=step.method, severity=scenario.severity,

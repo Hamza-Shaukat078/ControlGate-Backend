@@ -33,7 +33,11 @@ async def ensure_indexes() -> None:
         await db.attestations.drop_index("control_id_1")
     except Exception:
         pass
-    await db.attestations.create_index([("user_id", 1), ("control_id", 1)], unique=True)
+    try:
+        await db.attestations.drop_index("user_id_1_control_id_1")
+    except Exception:
+        pass
+    await db.attestations.create_index([("user_id", 1), ("scan_id", 1), ("control_id", 1)], unique=True)
     await db.token_revocations.create_index("jti", unique=True)
     await db.token_revocations.create_index("expires_at", expireAfterSeconds=0)
 

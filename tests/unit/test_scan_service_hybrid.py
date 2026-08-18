@@ -58,7 +58,15 @@ class TestHybridScan:
         with patch.object(ScanService, "_clone_repo", fake_clone), \
              patch("app.services.scan_service.get_pipeline") as mock_get_pipeline, \
              patch.object(ScanService, "_run_dynamic_checks",
-                          AsyncMock(return_value=(dynamic_findings, discovered_forms))):
+                          AsyncMock(return_value=(dynamic_findings, discovered_forms))), \
+             patch("app.domain.analysis.dynamic_probe.DynamicProbe.probe", AsyncMock(return_value=[])):
+            # DynamicProbe.probe (TLS/cert/HSTS live checks) isn't part of
+            # what this test is exercising (that's _run_dynamic_checks, mocked
+            # above) — TARGET is a real, public, DNS-resolvable domain, so
+            # without this mock it made a real network call and the real
+            # findings that came back (or didn't, depending on actual
+            # connectivity at test-run time) made vulnerabilities_found
+            # nondeterministic instead of the fixed count this test asserts.
             mock_pipeline = MagicMock()
             mock_pipeline.analyze_repository = AsyncMock(return_value=static_result)
             mock_get_pipeline.return_value = mock_pipeline

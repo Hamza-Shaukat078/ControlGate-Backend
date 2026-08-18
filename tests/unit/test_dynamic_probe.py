@@ -62,7 +62,12 @@ class TestTlsVersionCheck:
         with patch.object(DynamicProbe, "_negotiate_tls_version", side_effect=fake_negotiate):
             finding = await DynamicProbe()._check_tls_version("example.com", 443)
         assert finding.verdict == "fail"
-        assert "also accepted" in finding.note
+        # Regression — this asserted a substring ("also accepted") that
+        # doesn't match _check_tls_version's actual wording anymore
+        # ("...still succeeded (negotiated ...) — legacy protocol is not
+        # rejected"); the check's real behavior (fail when a legacy-only
+        # handshake still succeeds) was never broken, just the wording drifted.
+        assert "legacy protocol is not rejected" in finding.note
 
     @pytest.mark.asyncio
     async def test_connection_failure_is_not_tested(self):
@@ -74,7 +79,13 @@ class TestTlsVersionCheck:
 class TestCertTrustCheck:
     @pytest.mark.asyncio
     async def test_trusted_cert_passes(self):
-        with patch.object(DynamicProbe, "_verify_trusted_cert", return_value=None):
+        # Regression — _verify_trusted_cert's real contract (see its own
+        # docstring/implementation) is to always return a dict, `{}` at
+        # minimum, never None; _check_cert_trust's pass path unconditionally
+        # calls _cert_summary(cert).get(...) on it. Mocking None here
+        # violated that contract and crashed with AttributeError on a path
+        # that was never actually broken in production.
+        with patch.object(DynamicProbe, "_verify_trusted_cert", return_value={}):
             finding = await DynamicProbe()._check_cert_trust("example.com", 443)
         assert finding.control_id == "V12.2.2"
         assert finding.verdict == "pass"
@@ -335,7 +346,9 @@ class TestMtlsClientCertTrustCheck:
 class TestInternalTlsCertTrustCheck:
     @pytest.mark.asyncio
     async def test_trusted_cert_passes(self):
-        with patch.object(DynamicProbe, "_verify_trusted_cert", return_value=None):
+        # Same fix as TestCertTrustCheck.test_trusted_cert_passes above —
+        # _verify_trusted_cert never actually returns None.
+        with patch.object(DynamicProbe, "_verify_trusted_cert", return_value={}):
             finding = await DynamicProbe()._check_internal_tls_cert_trust("internal-svc.local", 8443)
         assert finding.control_id == "V12.3.4"
         assert finding.verdict == "pass"

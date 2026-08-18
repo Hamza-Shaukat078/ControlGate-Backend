@@ -366,3 +366,91 @@ class TestDomXssProbeLoop:
         audit_logs = [r.getMessage() for r in caplog.records if "Active-mode" in r.getMessage()]
         assert audit_logs
         assert "DOM_XSS_LIVE" in audit_logs[0]
+
+
+class TestRedirectWarningProbeLoop:
+    """V3.7.3 — run_redirect_warning_probe shares the same headless-browser
+    context/gate as the DOM-XSS loop above (redirect_warning_probe.py),
+    right after it in the same try block. Same mock-the-heavy-dependency
+    split as TestDomXssProbeLoop."""
+
+    @pytest.mark.asyncio
+    async def test_probe_runs_once_per_check_url_and_result_recorded(self):
+        svc, db = await _make_service()
+        _FakeSessionPair.last_primary = _FakePrimarySession()
+        redirect_finding = DynamicFinding(
+            control_id="V3.7.3", verdict=Verdict.FAIL, rule_id="REDIRECT_WARNING_LIVE",
+            url=TARGET, method="GET", note="silent redirect observed", severity="medium",
+        )
+        run_redirect_probe_mock = AsyncMock(return_value=redirect_finding)
+        # dom_xss_probe runs in the same real loop right before this one —
+        # asdict() gets called on whatever it returns when the summary is
+        # built, so it needs a real DynamicFinding too, not a bare AsyncMock().
+        dom_xss_finding = DynamicFinding(
+            control_id="V1.2.1", verdict=Verdict.PASS, rule_id="DOM_XSS_LIVE",
+            url=TARGET, method="GET", note="ok", severity="high",
+        )
+        fake_pw = _FakePlaywright()
+        await db.scans.insert_one({"scan_id": "scan-hb-13", "state": "PENDING"})
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult(urls=[TARGET]))), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.dom_xss_probe.run_dom_xss_probe", AsyncMock(return_value=dom_xss_finding)), \
+             patch("app.domain.analysis.dast.redirect_warning_probe.run_redirect_warning_probe", run_redirect_probe_mock), \
+             patch("playwright.async_api.async_playwright", lambda: fake_pw):
+            await svc._run_dynamic_scan(
+                "scan-hb-13", TARGET, dynamic_use_headless_browser=True, dynamic_active_mode=True,
+            )
+
+        run_redirect_probe_mock.assert_awaited_once()
+        assert run_redirect_probe_mock.await_args.args[1] == TARGET
+        assert run_redirect_probe_mock.await_args.kwargs["active_mode"] is True
+
+        doc = await db.scans.find_one({"scan_id": "scan-hb-13"})
+        findings = doc["summary"]["dynamic_findings"]
+        redirect_result = next(f for f in findings if f["rule_id"] == "REDIRECT_WARNING_LIVE")
+        assert redirect_result["verdict"] == "fail"
+        assert redirect_result["control_id"] == "V3.7.3"
+
+    @pytest.mark.asyncio
+    async def test_probe_bounded_to_five_urls(self):
+        svc, db = await _make_service()
+        _FakeSessionPair.last_primary = _FakePrimarySession()
+        crawl_result = CrawlResult(urls=[TARGET] + [f"{TARGET}/p{i}" for i in range(8)], forms=[])
+        pass_finding = DynamicFinding(
+            control_id="V3.7.3", verdict=Verdict.PASS, rule_id="REDIRECT_WARNING_LIVE",
+            url=TARGET, method="GET", note="ok", severity="medium",
+        )
+        run_redirect_probe_mock = AsyncMock(return_value=pass_finding)
+        # Same reasoning as the test above — dom_xss_probe runs in the same
+        # real loop and its return value gets asdict()'d too.
+        dom_xss_finding = DynamicFinding(
+            control_id="V1.2.1", verdict=Verdict.PASS, rule_id="DOM_XSS_LIVE",
+            url=TARGET, method="GET", note="ok", severity="high",
+        )
+        fake_pw = _FakePlaywright()
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=crawl_result)), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.dom_xss_probe.run_dom_xss_probe", AsyncMock(return_value=dom_xss_finding)), \
+             patch("app.domain.analysis.dast.redirect_warning_probe.run_redirect_warning_probe", run_redirect_probe_mock), \
+             patch("playwright.async_api.async_playwright", lambda: fake_pw):
+            await svc._run_dynamic_scan("scan-hb-14", TARGET, dynamic_use_headless_browser=True)
+
+        assert run_redirect_probe_mock.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_disabled_when_headless_browser_off(self):
+        svc, db = await _make_service()
+        _FakeSessionPair.last_primary = _FakePrimarySession()
+        run_redirect_probe_mock = AsyncMock()
+        with patch("app.domain.analysis.dast.session.DastSessionPair", _FakeSessionPair), \
+             patch("app.domain.analysis.dast.crawler.crawl", AsyncMock(return_value=CrawlResult(urls=[TARGET]))), \
+             patch("app.domain.analysis.dast.checks.run_payload_checks", AsyncMock(return_value=[])), \
+             patch("app.domain.analysis.dast.logout_discovery.discover_logout_url", AsyncMock(return_value=None)), \
+             patch("app.domain.analysis.dast.redirect_warning_probe.run_redirect_warning_probe", run_redirect_probe_mock):
+            await svc._run_dynamic_scan("scan-hb-15", TARGET)  # dynamic_use_headless_browser defaults False
+
+        run_redirect_probe_mock.assert_not_called()

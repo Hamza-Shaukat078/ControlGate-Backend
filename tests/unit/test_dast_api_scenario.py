@@ -70,3 +70,38 @@ def test_severity_and_description_pass_through():
     scenario = build_scenario_from_request(data)
     assert scenario.severity == "critical"
     assert scenario.description == "kills sessions"
+
+
+def test_new_assert_fields_each_become_their_own_assertion():
+    # V10.4.x/V10.7.1 — a status code alone can't tell a consent redirect
+    # apart from a silent re-grant (both 302), so these fields exist
+    # alongside assert_status_in, not instead of it.
+    data = {
+        "scenario_id": "X", "steps": [{
+            "method": "GET", "url": "https://target.example/authorize",
+            "assert_status_in": [302],
+            "assert_body_contains": "scope",
+            "assert_body_not_contains": "admin:write",
+            "assert_redirect_location_contains": "consent",
+        }],
+    }
+    scenario = build_scenario_from_request(data)
+    types_and_expected = {a.type: a.expected for a in scenario.steps[0].assertions}
+    assert types_and_expected == {
+        "status_in": [302],
+        "body_contains": "scope",
+        "body_not_contains": "admin:write",
+        "redirect_location_contains": "consent",
+    }
+
+
+def test_delay_seconds_passed_through_to_the_step():
+    data = {
+        "scenario_id": "X", "steps": [
+            {"method": "GET", "url": "https://target.example/authorize"},
+            {"method": "POST", "url": "https://target.example/token", "delay_seconds": 600},
+        ],
+    }
+    scenario = build_scenario_from_request(data)
+    assert scenario.steps[0].delay_seconds is None
+    assert scenario.steps[1].delay_seconds == 600

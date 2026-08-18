@@ -37,6 +37,22 @@
     "requires_active_mode": true,
     "description": "Sends a request with an ambiguous Content-Length/Transfer-Encoding combination immediately followed by a distinctly-marked second request on the same connection, then checks whether the marker leaks into the first response — evidence the front-end/back-end chain disagrees on request framing. Best-effort indicator, not a full exploit chain. Gated behind active_mode: a real desync can affect other users' traffic on shared infrastructure, unlike this engine's other checks."
   },
+  "WEBSOCKET_TOKEN_UNAUTH_ISSUANCE": {
+    "check_type": "payload",
+    "asvs_controls": ["V4.4.4"],
+    "owasp": "A01:2021-Broken Access Control",
+    "cwe": "CWE-306",
+    "severity": "high",
+    "description": "Requests a discovered WebSocket/realtime token-issuance endpoint (URL shape: /ws/token, /websocket-ticket, /realtime/auth, ...) once through the scan's authenticated session and once with no credentials at all. If the unauthenticated request also gets back a token/ticket, the endpoint doesn't actually require a prior authenticated session. Only runs when the scan has an authenticated session configured and the path matches a token-issuance shape; otherwise there's nothing to compare against."
+  },
+  "WEBSOCKET_TOKEN_DERIVED_FROM_SESSION": {
+    "check_type": "payload",
+    "asvs_controls": ["V4.4.3"],
+    "owasp": "A07:2021-Identification and Authentication Failures",
+    "cwe": "CWE-330",
+    "severity": "medium",
+    "description": "Requests a discovered WebSocket/realtime token-issuance endpoint through the scan's authenticated session and compares the returned token verbatim against every HTTP session cookie/auth-header value that same session is using. An exact match means the WebSocket token is just the HTTP session token relabeled, not a dedicated value — a FAIL is decisive, but a clean result only proves no *literal* reuse (a cryptographically derived-but-different value isn't detectable this way), so it never passes the control on its own."
+  },
   "CSRF_TOKEN_NOT_VALIDATED": {
     "check_type": "payload",
     "asvs_controls": ["V3.5.1"],
@@ -70,5 +86,49 @@
     "severity": "critical",
     "requires_active_mode": true,
     "description": "For each query parameter the URL already carries, appends an always-true (' OR '1'='1) and an always-false (' OR '1'='2) SQL boolean to the existing value and compares the two responses — a real unparameterized query returns visibly different results for the two, or leaks a DB driver error message outright. Live-exploitability check for the same control the static SQL_INJECTION taint rule flags at the source level. Gated behind active_mode: on a write-context param these payloads reach a real query, same risk class as CSRF_TOKEN_NOT_VALIDATED."
+  },
+  "COMMAND_INJECTION_LIVE": {
+    "check_type": "payload",
+    "asvs_controls": ["V1.2.5"],
+    "owasp": "A03:2021-Injection",
+    "cwe": "CWE-78",
+    "severity": "critical",
+    "requires_active_mode": true,
+    "description": "For each query parameter, tries a shell-delimited sleep payload (;, |, backtick, $()) via oracles.timing_oracle — no in-band heuristic exists for blind command injection, so a measurable delay is the first-pass signal (FAIL). Escalates to an out-of-band curl callback using the winning delimiter; a collaborator hit is the reproduced-impact proof (CONFIRMED). Live-exploitability check for the static COMMAND_INJECTION taint rule. Gated behind active_mode: these payloads can execute real commands server-side."
+  },
+  "SSTI_LIVE": {
+    "check_type": "payload",
+    "asvs_controls": ["V1.3.2"],
+    "owasp": "A03:2021-Injection",
+    "cwe": "CWE-1336",
+    "severity": "critical",
+    "requires_active_mode": true,
+    "description": "Injects a Jinja/EL/ERB polyglot arithmetic expression computing a random large product; the product appearing in the response (and not in an unmodified baseline) is evidence the template engine evaluates injected syntax (FAIL). Escalates to known Jinja2/Twig/Freemarker RCE gadgets that call back the out-of-band collaborator; a hit is CONFIRMED. Live-exploitability check for the static CODE_INJECTION taint rule (server-side template injection). Gated behind active_mode: the RCE gadgets execute real code server-side."
+  },
+  "XXE_LIVE": {
+    "check_type": "payload",
+    "asvs_controls": ["V1.5.1"],
+    "owasp": "A05:2021-Security Misconfiguration",
+    "cwe": "CWE-611",
+    "severity": "critical",
+    "requires_active_mode": true,
+    "description": "POSTs an external-entity XML document (Content-Type: application/xml) whose DOCTYPE points the entity at the scan's out-of-band collaborator. A callback proves the target's XML parser resolves external entities (CONFIRMED) — there's no in-band signal for a blind XXE, so this check is collaborator-only (NOT_TESTED without one). Live-exploitability check for the static XXE_UNSAFE_XML_PARSER taint rule. Gated behind active_mode: posting arbitrary XML bodies to arbitrary endpoints is a real side-effecting request."
+  },
+  "NOSQL_INJECTION_LIVE": {
+    "check_type": "payload",
+    "asvs_controls": ["V1.2.4"],
+    "owasp": "A03:2021-Injection",
+    "cwe": "CWE-943",
+    "severity": "high",
+    "requires_active_mode": true,
+    "description": "For each query parameter, replaces it with a bracket-notation MongoDB operator payload (param[$ne]=, param[$gt]=) — the query-string shape several frameworks (e.g. Express+qs) parse into a nested filter object — and compares the response against a definite-non-match control value via oracles.response_diff_oracle. A visible difference is evidence the param reaches an unsanitized NoSQL query filter (boolean-blind, stays FAIL — no further exploitation step). Live-exploitability check for the static NOSQL_INJECTION taint rule. Gated behind active_mode: same write-context-param risk class as SQL_INJECTION_LIVE."
+  },
+  "CORS_MISCONFIG_LIVE": {
+    "check_type": "payload",
+    "asvs_controls": ["V3.4.2"],
+    "owasp": "A05:2021-Security Misconfiguration",
+    "cwe": "CWE-942",
+    "severity": "medium",
+    "description": "Sends a single read-only request with an attacker-controlled Origin header and inspects Access-Control-Allow-Origin/-Credentials in the response. Reflecting the probe origin back (optionally combined with Allow-Credentials: true) means any origin can make credentialed cross-site requests and read the response. Cheap and read-only — not gated behind active_mode, same class as OPEN_REDIRECT_LIVE/REFLECTED_XSS_LIVE. Live-exploitability check for the static CORS_MISCONFIGURATION rule."
   }
 }

@@ -1,9 +1,21 @@
 import ipaddress
+import os
 import socket
 from urllib.parse import urlsplit
 
 
 _LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
+
+
+def _private_scan_targets_allowed() -> bool:
+    # Dev/testing escape hatch ONLY — e.g. scanning a locally-run target
+    # (docker Juice Shop, a local dev server) while developing the scanner
+    # itself. Off by default; must be explicitly opted into per-process via
+    # env var, never a config file default, so it can't accidentally ship
+    # enabled. Every real scan request still goes through this same check —
+    # this doesn't add a separate code path, it just widens what one
+    # function call accepts, for the lifetime of the process that set it.
+    return os.getenv("ALLOW_PRIVATE_SCAN_TARGETS", "").strip().lower() in ("1", "true", "yes")
 
 
 def _reject_private_ip(ip_text: str) -> None:
@@ -21,7 +33,11 @@ def _reject_private_ip(ip_text: str) -> None:
 
 def _validate_public_host(host: str, resolve: bool = True) -> None:
     normalized = host.strip().strip("[]").lower().rstrip(".")
-    if not normalized or normalized in _LOCAL_HOSTNAMES or normalized.endswith(".localhost"):
+    if not normalized:
+        raise ValueError("URL host is not allowed")
+    if _private_scan_targets_allowed():
+        return
+    if normalized in _LOCAL_HOSTNAMES or normalized.endswith(".localhost"):
         raise ValueError("URL host is not allowed")
 
     try:

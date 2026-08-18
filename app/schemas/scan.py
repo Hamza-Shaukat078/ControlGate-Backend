@@ -21,6 +21,18 @@ class DynamicFormLoginRequest(APIModel):
     password_field: str
     username: str
     password: str
+    # Track C6 — COOKIE + CSRF: both must be supplied together (see
+    # validate_csrf_fields_paired below) to fetch a CSRF token before
+    # logging in. Neither set (the default) behaves exactly as before this
+    # existed — a plain username/password POST.
+    csrf_field: Optional[str] = Field(
+        None, description="Name of the CSRF token field/input to include in the login POST body. "
+                           "Requires csrf_source_url."
+    )
+    csrf_source_url: Optional[str] = Field(
+        None, description="URL to GET before logging in, to extract the CSRF token named csrf_field "
+                           "from (a hidden <input>, <meta> tag, or JSON field). Requires csrf_field."
+    )
 
     @field_validator('login_url')
     @classmethod
@@ -28,6 +40,56 @@ class DynamicFormLoginRequest(APIModel):
         if not (v.startswith("http://") or v.startswith("https://")):
             raise ValueError("'login_url' must start with http:// or https://")
         return v
+
+    @field_validator('csrf_source_url')
+    @classmethod
+    def validate_csrf_source_url_scheme(cls, v):
+        if v is not None and not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("'csrf_source_url' must start with http:// or https://")
+        return v
+
+    @model_validator(mode='after')
+    def validate_csrf_fields_paired(self):
+        if bool(self.csrf_field) != bool(self.csrf_source_url):
+            raise ValueError("'csrf_field' and 'csrf_source_url' must be supplied together")
+        return self
+
+
+class DynamicOAuth2Request(APIModel):
+    """Track C6 — client-credentials and password grants (RFC 6749 §4.3/§4.4).
+    Whichever it is, DastSession ends up with an Authorization: Bearer
+    <access_token> header, refreshed automatically (refresh_token grant if
+    the response included one, else re-running this same grant) on a 401
+    mid-scan — see DastSession._refresh_oauth2_token."""
+
+    token_url: str
+    grant_type: str = "client_credentials"
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    scope: Optional[str] = None
+
+    @field_validator('token_url')
+    @classmethod
+    def validate_token_url_scheme(cls, v):
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("'token_url' must start with http:// or https://")
+        return v
+
+    @field_validator('grant_type')
+    @classmethod
+    def validate_grant_type(cls, v):
+        allowed = {"client_credentials", "password"}
+        if v not in allowed:
+            raise ValueError(f"'grant_type' must be one of {sorted(allowed)}")
+        return v
+
+    @model_validator(mode='after')
+    def validate_grant_requirements(self):
+        if self.grant_type == "password" and not (self.username and self.password):
+            raise ValueError("grant_type='password' requires 'username' and 'password'")
+        return self
 
 
 class DynamicScenarioStepRequest(APIModel):
@@ -40,6 +102,26 @@ class DynamicScenarioStepRequest(APIModel):
     headers: Optional[dict] = None
     follow_redirects: bool = False
     assert_status_in: Optional[list[int]] = None
+    # Track C — the OAuth/OIDC live-protocol checks (V10.4.x) this field set
+    # was added for need more than a status code to tell "silently accepted"
+    # apart from "correctly rejected": two different response_modes/redirect
+    # targets both come back 302, a consent screen and a silent re-grant
+    # both come back 302 (V10.7.1) — only the body/redirect target tells
+    # them apart. All non-null assert_* fields on one step are ANDed
+    # together (api_scenario.py appends each as its own Assertion;
+    # scenario_runner.run_scenario already requires every assertion in a
+    # step's list to pass).
+    assert_body_contains: Optional[str] = None
+    assert_body_not_contains: Optional[str] = None
+    assert_redirect_location_contains: Optional[str] = None
+    # V10.4.3 — authorization codes must be rejected past their max lifetime
+    # (10 min L1/L2, 1 min L3), which needs a real wall-clock wait between
+    # obtaining the code and attempting the exchange. Capped at 650s (a bit
+    # over the 10-minute ceiling ASVS itself specifies, so it's usable for
+    # every level this control applies to) — scan_service.py extends this
+    # scenario's own timeout by the same amount so the wait doesn't just
+    # get cut off by PER_ITEM_TIMEOUT.
+    delay_seconds: Optional[float] = Field(None, ge=0, le=650)
 
     @field_validator('method')
     @classmethod
@@ -162,6 +244,213 @@ class DynamicIdorProbeRequest(APIModel):
         return v
 
 
+class DynamicMassAssignmentProbeRequest(APIModel):
+    """V15.3.3 — submits an unrequested privileged field (e.g. {"role":
+    "admin"}) alongside a normal-looking object-update request from the
+    primary actor, then has the second actor independently re-read the
+    resource to confirm whether it actually took. Requires
+    dynamic_second_actor_auth_mode to be configured — the same
+    'don't trust the submitter's own view' reasoning as IDOR probes,
+    applied to state persistence instead of access control."""
+
+    scenario_id: str
+    asvs_controls: list[str] = Field(default_factory=lambda: ["V15.3.3"])
+    update_url: str
+    update_method: str = "PATCH"
+    baseline_fields: Optional[dict] = None
+    injected_field: str = "role"
+    injected_value: object = "admin"
+    verify_url: Optional[str] = None
+    verify_field_path: Optional[str] = None
+    severity: str = "high"
+
+    @field_validator('update_method')
+    @classmethod
+    def validate_method(cls, v):
+        allowed = {"POST", "PUT", "PATCH"}
+        if v.upper() not in allowed:
+            raise ValueError(f"'update_method' must be one of {sorted(allowed)}")
+        return v.upper()
+
+    @field_validator('update_url')
+    @classmethod
+    def validate_url_scheme(cls, v):
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("'update_url' must start with http:// or https://")
+        return v
+
+
+class DynamicTimingProbeVariantRequest(APIModel):
+    params: Optional[dict] = None
+    data: Optional[dict] = None
+    json_body: Optional[dict] = None
+
+
+class DynamicTimingComparisonProbeRequest(APIModel):
+    """V11.2.5 — sends two fixed payload variants at the same endpoint
+    repeatedly and checks whether response timing distinguishes them (a
+    padding-oracle / timing-side-channel indicator). This scanner has no
+    way to generate valid-vs-invalid-padding ciphertext for a target's own
+    encryption scheme on its own — variant_a/variant_b are supplied by the
+    tester, who already knows the scheme and has crafted (for example) a
+    valid-padding-but-wrong-content ciphertext and an invalid-padding one.
+    Neither variant is assumed to be the "expected" one; the probe only
+    reports whether the two are timing-distinguishable at all."""
+
+    scenario_id: str
+    asvs_controls: list[str] = Field(default_factory=lambda: ["V11.2.5"])
+    url: str
+    method: str = "POST"
+    session: str = "primary"
+    variant_a: DynamicTimingProbeVariantRequest
+    variant_b: DynamicTimingProbeVariantRequest
+    headers: Optional[dict] = None
+    samples: int = Field(7, ge=3, le=30)
+    requires_active_mode: bool = True
+    severity: str = "medium"
+
+    @field_validator('method')
+    @classmethod
+    def validate_method(cls, v):
+        allowed = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+        if v.upper() not in allowed:
+            raise ValueError(f"'method' must be one of {sorted(allowed)}")
+        return v.upper()
+
+    @field_validator('session')
+    @classmethod
+    def validate_session_actor(cls, v):
+        if v not in ("primary", "secondary"):
+            raise ValueError("'session' must be 'primary' or 'secondary'")
+        return v
+
+    @field_validator('url')
+    @classmethod
+    def validate_url_scheme(cls, v):
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("'url' must start with http:// or https://")
+        return v
+
+
+class DynamicSignalingFuzzProbeRequest(APIModel):
+    """V17.3.2 — sends a corpus of malformed offer/answer/ICE-candidate-
+    shaped messages at a WebSocket signaling endpoint and checks whether a
+    fresh handshake still succeeds immediately after each one. payloads
+    defaults to a built-in corpus (websocket_fuzz_probe.
+    DEFAULT_SIGNALING_FUZZ_PAYLOADS) covering the obvious failure classes
+    (truncated JSON, type confusion, an oversized field, embedded control
+    characters, a missing required field, ...) if not supplied — pass an
+    empty list explicitly to opt out rather than omitting the field."""
+
+    scenario_id: str
+    asvs_controls: list[str] = Field(default_factory=lambda: ["V17.3.2"])
+    url: str
+    payloads: Optional[list[str]] = None
+    headers: Optional[dict] = None
+    requires_active_mode: bool = True
+    severity: str = "high"
+
+    @field_validator('url')
+    @classmethod
+    def validate_url_scheme(cls, v):
+        if not (v.startswith("ws://") or v.startswith("wss://")):
+            raise ValueError("'url' must start with ws:// or wss://")
+        return v
+
+
+class DynamicWebRtcConnectionRequest(APIModel):
+    """One negotiated WebRTC peer connection, for the V17.2.x media-layer
+    probes below. Exactly one of signaling_url (a WHIP-style exchange:
+    this scanner POSTs its own offer SDP as `Content-Type: application/sdp`
+    and expects the answer SDP back in the response body — a real,
+    standardized shape a growing number of ingest/SFU endpoints speak
+    natively) or remote_answer_sdp (the tester already completed the
+    offer/answer exchange out-of-band and hands the resulting answer
+    straight to this probe, for every other signaling shape) must be set."""
+
+    signaling_url: Optional[str] = None
+    signaling_headers: Optional[dict] = None
+    remote_answer_sdp: Optional[str] = None
+    ice_servers: list[str] = Field(default_factory=list)
+
+    @field_validator('signaling_url')
+    @classmethod
+    def validate_signaling_url_scheme(cls, v):
+        if v is not None and not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("'signaling_url' must start with http:// or https://")
+        return v
+
+    @model_validator(mode='after')
+    def validate_exactly_one_signaling_method(self):
+        if bool(self.signaling_url) == bool(self.remote_answer_sdp):
+            raise ValueError("exactly one of 'signaling_url' or 'remote_answer_sdp' must be set")
+        return self
+
+
+class DynamicMediaFloodProbeRequest(APIModel):
+    """V17.2.5/V17.2.7 — holds N other real, legitimate WebRTC sessions
+    (flood_connections) open concurrently with one control_connection and
+    flags it if the control session's own media stops flowing. The two
+    controls are the same test from this scanner's vantage point; tag
+    asvs_controls with V17.2.7 instead of the V17.2.5 default if
+    control_connection points at a recording-enabled session specifically
+    — this scanner can't tell "this session is being recorded" from the
+    outside."""
+
+    scenario_id: str
+    asvs_controls: list[str] = Field(default_factory=lambda: ["V17.2.5"])
+    control_connection: DynamicWebRtcConnectionRequest
+    flood_connections: list[DynamicWebRtcConnectionRequest] = Field(..., min_length=1)
+    hold_seconds: float = Field(5.0, ge=1.0, le=60.0)
+    requires_active_mode: bool = True
+    severity: str = "high"
+
+
+class DynamicMalformedPacketProbeRequest(APIModel):
+    """V17.2.4 — sends a corpus of malformed raw datagrams at the media
+    transport (the same UDP association SRTP/DTLS/ICE already share) and
+    checks whether the connection stays healthy. payloads are hex-encoded
+    strings (raw bytes aren't JSON-safe); defaults to a built-in corpus
+    (webrtc_probe.DEFAULT_MALFORMED_RTP_PAYLOADS) if not supplied — pass
+    an empty list explicitly to opt out rather than omitting the field."""
+
+    scenario_id: str
+    asvs_controls: list[str] = Field(default_factory=lambda: ["V17.2.4"])
+    connection: DynamicWebRtcConnectionRequest
+    payloads: Optional[list[str]] = None
+    requires_active_mode: bool = True
+    severity: str = "critical"
+
+    @field_validator('payloads')
+    @classmethod
+    def validate_payloads_are_hex(cls, v):
+        if v is None:
+            return v
+        for entry in v:
+            try:
+                bytes.fromhex(entry)
+            except ValueError:
+                raise ValueError(f"payload {entry!r} is not valid hex")
+        return v
+
+
+class DynamicSrtpAuthProbeRequest(APIModel):
+    """V17.2.3 — needs TWO connections (attacker + observer) because this
+    scanner can't see the target server's own internal accept/reject
+    state; the only generically observable signal is whether a forged
+    packet gets RELAYED to the second connection, which only means
+    anything against an SFU/mixer-style target. A baseline check (does a
+    validly-authenticated forged packet get relayed at all) gates the real
+    test automatically — see webrtc_probe.py's own docstring."""
+
+    scenario_id: str
+    asvs_controls: list[str] = Field(default_factory=lambda: ["V17.2.3"])
+    attacker_connection: DynamicWebRtcConnectionRequest
+    observer_connection: DynamicWebRtcConnectionRequest
+    requires_active_mode: bool = True
+    severity: str = "high"
+
+
 class ScanStart(APIModel):
     # Direct code scan fields
     code: Optional[str] = Field(None, description="Direct code input (max 400 lines)")
@@ -189,6 +478,15 @@ class ScanStart(APIModel):
                     "(TLS version, HTTPS enforcement, certificate trust, live HSTS header, "
                     ".git/.svn exposure). Required when scan_type is 'dynamic' or 'hybrid'.",
     )
+    dynamic_additional_target_urls: Optional[list[str]] = Field(
+        None, max_length=10,
+        description="Extra origins for a microservice app (crawler.py's same-origin rule means "
+                    "target_url alone can never reach a sibling service on its own port) — swept "
+                    "within this SAME scan and reported together, instead of needing a separate scan "
+                    "per service. Each gets the same auth/active-mode/probe config as target_url; for "
+                    "a hybrid scan, the static->dynamic bridge correlation (build_dynamic_targets) "
+                    "runs against every one of them, not just target_url.",
+    )
 
     # Dynamic-scan auth (Phase 1/2B) — only meaningful when scan_type is
     # 'dynamic'/'hybrid'. dynamic_bearer_token/dynamic_form_login.password are
@@ -199,13 +497,27 @@ class ScanStart(APIModel):
         AuthMode.NONE,
         description="Auth mode for dynamic-scan checks that need an authenticated session "
                     "(e.g. the logout-invalidation scenario). 'bearer' requires dynamic_bearer_token; "
-                    "'form_login' requires dynamic_form_login.",
+                    "'form_login' requires dynamic_form_login (optionally with csrf_field/"
+                    "csrf_source_url for a CSRF-protected login); 'oauth2' requires dynamic_oauth2 "
+                    "(client-credentials or password grant, auto-refreshed on 401); 'api_key' requires "
+                    "dynamic_api_key_header and dynamic_api_key_value.",
     )
     dynamic_bearer_token: Optional[str] = Field(
         None, description="Bearer token, required when dynamic_auth_mode='bearer'. Never persisted."
     )
     dynamic_form_login: Optional[DynamicFormLoginRequest] = Field(
         None, description="Form-login credentials, required when dynamic_auth_mode='form_login'. Never persisted."
+    )
+    dynamic_oauth2: Optional[DynamicOAuth2Request] = Field(
+        None, description="OAuth2 client-credentials/password grant config, required when "
+                           "dynamic_auth_mode='oauth2'. Never persisted."
+    )
+    dynamic_api_key_header: Optional[str] = Field(
+        None, description="Header name the static API key is sent under, required when "
+                           "dynamic_auth_mode='api_key' (e.g. 'X-API-Key'). Never persisted."
+    )
+    dynamic_api_key_value: Optional[str] = Field(
+        None, description="Static API key value, required when dynamic_auth_mode='api_key'. Never persisted."
     )
     dynamic_active_mode: bool = Field(
         False,
@@ -229,6 +541,15 @@ class ScanStart(APIModel):
     )
     dynamic_second_actor_form_login: Optional[DynamicFormLoginRequest] = Field(
         None, description="Form-login credentials for the second actor. Never persisted."
+    )
+    dynamic_second_actor_oauth2: Optional[DynamicOAuth2Request] = Field(
+        None, description="OAuth2 config for the second actor. Never persisted."
+    )
+    dynamic_second_actor_api_key_header: Optional[str] = Field(
+        None, description="API key header name for the second actor. Never persisted."
+    )
+    dynamic_second_actor_api_key_value: Optional[str] = Field(
+        None, description="API key value for the second actor. Never persisted."
     )
     dynamic_scenarios: Optional[list[DynamicScenarioRequest]] = Field(
         None, max_length=20,
@@ -254,6 +575,55 @@ class ScanStart(APIModel):
                     "dynamic_second_actor_auth_mode to be configured. Capped at 20 per scan, same "
                     "reasoning as dynamic_scenarios.",
     )
+    dynamic_mass_assignment_probes: Optional[list[DynamicMassAssignmentProbeRequest]] = Field(
+        None, max_length=20,
+        description="User-supplied mass-assignment probes (V15.3.3) — the primary actor submits an "
+                    "unrequested privileged field (e.g. role=admin) on a normal-looking object-update "
+                    "request, and the second actor independently re-reads the resource to confirm "
+                    "whether it actually took. Requires dynamic_second_actor_auth_mode to be "
+                    "configured. Capped at 20 per scan, same reasoning as dynamic_scenarios.",
+    )
+    dynamic_timing_probes: Optional[list[DynamicTimingComparisonProbeRequest]] = Field(
+        None, max_length=20,
+        description="User-supplied timing-side-channel probes (V11.2.5) — sends two tester-crafted "
+                    "payload variants (e.g. valid-padding-but-wrong-content ciphertext vs. "
+                    "invalid-padding ciphertext) at the same endpoint repeatedly and flags it if "
+                    "response timing distinguishes them. This scanner can't generate valid ciphertext "
+                    "for a target's own encryption scheme on its own, so both variants must be "
+                    "supplied. Capped at 20 per scan, same reasoning as dynamic_scenarios.",
+    )
+    dynamic_signaling_fuzz_probes: Optional[list[DynamicSignalingFuzzProbeRequest]] = Field(
+        None, max_length=20,
+        description="User-supplied WebSocket signaling-server fuzz probes (V17.3.2) — sends a "
+                    "corpus of malformed offer/answer/ICE-candidate-shaped messages at a WebSocket "
+                    "signaling endpoint and flags it if a fresh handshake stops succeeding "
+                    "immediately after one of them (evidence the server crashed or hung). Capped "
+                    "at 20 per scan, same reasoning as dynamic_scenarios.",
+    )
+    dynamic_media_flood_probes: Optional[list[DynamicMediaFloodProbeRequest]] = Field(
+        None, max_length=10,
+        description="User-supplied WebRTC media-flood probes (V17.2.5/V17.2.7) — negotiates real "
+                    "DTLS/SRTP peer connections (needs the aiortc dependency) and holds N other "
+                    "legitimate sessions open concurrently with one control session, flagging it if "
+                    "the control session's own media stops flowing. Capped at 10 per scan — each "
+                    "one is N+1 real, held-open media sessions against the target.",
+    )
+    dynamic_malformed_packet_probes: Optional[list[DynamicMalformedPacketProbeRequest]] = Field(
+        None, max_length=20,
+        description="User-supplied WebRTC malformed-packet probes (V17.2.4) — sends a corpus of "
+                    "malformed raw datagrams at the media transport and flags it if the connection "
+                    "stops being healthy immediately after one of them. Capped at 20 per scan, same "
+                    "reasoning as dynamic_scenarios.",
+    )
+    dynamic_srtp_auth_probes: Optional[list[DynamicSrtpAuthProbeRequest]] = Field(
+        None, max_length=20,
+        description="User-supplied SRTP authentication-enforcement probes (V17.2.3) — forges an "
+                    "SRTP packet with a corrupted authentication tag and checks whether a second, "
+                    "observing connection ever sees it relayed. Only meaningful against an "
+                    "SFU/mixer-style target that relays media between sessions; degrades to "
+                    "not_tested otherwise. Capped at 20 per scan, same reasoning as "
+                    "dynamic_scenarios.",
+    )
     dynamic_crawl_max_pages: Optional[int] = Field(
         None, ge=1, le=100,
         description="Override the crawler's default page-visit cap (10) for dynamic/hybrid scans. "
@@ -262,6 +632,18 @@ class ScanStart(APIModel):
     dynamic_crawl_max_depth: Optional[int] = Field(
         None, ge=0, le=5,
         description="Override the crawler's default link-following depth (2) for dynamic/hybrid scans.",
+    )
+    dynamic_state_crawl_max_forms: Optional[int] = Field(
+        None, ge=1, le=30,
+        description="Track C6 — override how many distinct discovered forms the state/form-transition "
+                    "crawl submits (default 5) to reach post-submission pages (search results, checkout "
+                    "steps, password-reset confirmation, ...) that a pure link-following crawl can't see. "
+                    "Only runs when dynamic_active_mode is true — submitting a form is a real state change.",
+    )
+    dynamic_state_crawl_max_depth: Optional[int] = Field(
+        None, ge=0, le=5,
+        description="Override how many chained form submissions the state/form-transition crawl follows "
+                    "(default 2) — e.g. login -> dashboard -> update-profile is depth 2.",
     )
     dynamic_rule_ids: Optional[list[str]] = Field(
         None, max_length=50,
@@ -296,6 +678,15 @@ class ScanStart(APIModel):
                     "useful when the spec isn't served live by the target. Mutually exclusive with "
                     "'dynamic_openapi_spec_url'.",
     )
+    enable_llm: bool = Field(
+        True,
+        description="Whether the static pipeline's LLM classification pass runs on flagged findings "
+                    "(confidence scoring / natural-language explanation). Regex and taint/DFG detection "
+                    "run identically either way — this only toggles the LLM enrichment step, which can "
+                    "add substantial wall-clock time (one call per flagged finding, with provider "
+                    "fallback/retry) on a large repository, especially if configured LLM providers are "
+                    "unavailable/rate-limited. Ignored for scan_type='dynamic' (no static pipeline runs).",
+    )
     dynamic_use_headless_browser: bool = Field(
         False,
         description="Track C2 — additionally crawl with a real headless Chromium (via Playwright) and "
@@ -311,6 +702,15 @@ class ScanStart(APIModel):
     def validate_target_url_scheme(cls, v):
         if v is not None and not (v.startswith("http://") or v.startswith("https://")):
             raise ValueError("'target_url' must start with http:// or https://")
+        return v
+
+    @field_validator('dynamic_additional_target_urls')
+    @classmethod
+    def validate_additional_target_urls_scheme(cls, v):
+        if v:
+            for url in v:
+                if not (url.startswith("http://") or url.startswith("https://")):
+                    raise ValueError(f"'{url}' in dynamic_additional_target_urls must start with http:// or https://")
         return v
 
     @field_validator('code')
@@ -352,6 +752,15 @@ class ScanStart(APIModel):
             raise ValueError("'dynamic_bearer_token' is required when dynamic_auth_mode is 'bearer'")
         if self.dynamic_auth_mode == AuthMode.FORM_LOGIN and not self.dynamic_form_login:
             raise ValueError("'dynamic_form_login' is required when dynamic_auth_mode is 'form_login'")
+        if self.dynamic_auth_mode == AuthMode.OAUTH2 and not self.dynamic_oauth2:
+            raise ValueError("'dynamic_oauth2' is required when dynamic_auth_mode is 'oauth2'")
+        if self.dynamic_auth_mode == AuthMode.API_KEY and not (
+            self.dynamic_api_key_header and self.dynamic_api_key_value
+        ):
+            raise ValueError(
+                "'dynamic_api_key_header' and 'dynamic_api_key_value' are both required when "
+                "dynamic_auth_mode is 'api_key'"
+            )
         if self.dynamic_second_actor_auth_mode == AuthMode.BEARER and not self.dynamic_second_actor_bearer_token:
             raise ValueError(
                 "'dynamic_second_actor_bearer_token' is required when "
@@ -361,6 +770,17 @@ class ScanStart(APIModel):
             raise ValueError(
                 "'dynamic_second_actor_form_login' is required when "
                 "dynamic_second_actor_auth_mode is 'form_login'"
+            )
+        if self.dynamic_second_actor_auth_mode == AuthMode.OAUTH2 and not self.dynamic_second_actor_oauth2:
+            raise ValueError(
+                "'dynamic_second_actor_oauth2' is required when dynamic_second_actor_auth_mode is 'oauth2'"
+            )
+        if self.dynamic_second_actor_auth_mode == AuthMode.API_KEY and not (
+            self.dynamic_second_actor_api_key_header and self.dynamic_second_actor_api_key_value
+        ):
+            raise ValueError(
+                "'dynamic_second_actor_api_key_header' and 'dynamic_second_actor_api_key_value' are both "
+                "required when dynamic_second_actor_auth_mode is 'api_key'"
             )
         return self
 
@@ -392,6 +812,70 @@ class ScanStart(APIModel):
         return v
 
 
+class ProbeDiscoveryRequest(APIModel):
+    """Track: probe auto-discovery — drives probe_discovery.py's GET sweep
+    ahead of an actual scan, so the GUI can pre-fill IDOR/mass-assignment
+    candidates for the user to review instead of hand-typing resource URLs.
+    Same auth shape as ScanStart's dynamic_* fields (primary + optional
+    second actor), just without everything else a real scan needs."""
+
+    target_urls: list[str] = Field(..., min_length=1, max_length=10)
+
+    repo_id: Optional[int] = Field(
+        None,
+        description="Optional repository ID — when provided, the repo is briefly cloned to run the same "
+                    "source-route discovery a hybrid scan uses (bridge.py's discover_routes_from_source), "
+                    "so a pure-JSON API with no crawlable HTML/OpenAPI spec (its real endpoints live at "
+                    "target_url + a sub-path, e.g. /orders, never visible from a bare-origin GET) still "
+                    "surfaces its resource-list endpoints instead of finding nothing.",
+    )
+    repo_branch: str = "main"
+
+    dynamic_auth_mode: AuthMode = AuthMode.NONE
+    dynamic_bearer_token: Optional[str] = None
+    dynamic_form_login: Optional[DynamicFormLoginRequest] = None
+    dynamic_oauth2: Optional[DynamicOAuth2Request] = None
+    dynamic_api_key_header: Optional[str] = None
+    dynamic_api_key_value: Optional[str] = None
+
+    dynamic_second_actor_auth_mode: AuthMode = AuthMode.NONE
+    dynamic_second_actor_bearer_token: Optional[str] = None
+    dynamic_second_actor_form_login: Optional[DynamicFormLoginRequest] = None
+    dynamic_second_actor_oauth2: Optional[DynamicOAuth2Request] = None
+    dynamic_second_actor_api_key_header: Optional[str] = None
+    dynamic_second_actor_api_key_value: Optional[str] = None
+
+    @field_validator('target_urls')
+    @classmethod
+    def validate_target_urls_scheme(cls, v):
+        for url in v:
+            if not (url.startswith("http://") or url.startswith("https://")):
+                raise ValueError(f"'{url}' must start with http:// or https://")
+        return v
+
+
+class IdorCandidateRead(APIModel):
+    scenario_id: str
+    owner_resource_url: str
+    method: str = "GET"
+    source_url: str = ""
+
+
+class MassAssignmentCandidateRead(APIModel):
+    scenario_id: str
+    update_url: str
+    update_method: str = "PUT"
+    injected_field: str
+    injected_value: object
+    source_url: str = ""
+
+
+class ProbeDiscoveryResponse(APIModel):
+    idor_candidates: list[IdorCandidateRead] = Field(default_factory=list)
+    mass_assignment_candidates: list[MassAssignmentCandidateRead] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class ScanResponse(APIModel):
     scan_id: str = Field(..., description="Unique scan identifier for polling")
     status: str = Field("PENDING", description="Initial scan status")
@@ -412,6 +896,18 @@ class ScanStatusRead(APIModel):
     current_file: str | None = None
     files_scanned: int = 0
     total_files: int = 0
+    # Dynamic/DAST phase telemetry (Track: live dynamic scan viewer) — mirrors
+    # current_file/files_scanned's role for the static phase, but for the
+    # DAST checks (crawl, payload checks, JWT/SSRF/mass-assignment probes,
+    # etc.) that run after/alongside it. current_dynamic_action is the
+    # human-readable checkpoint _run_dynamic_checks last announced (e.g.
+    # "Running payload checks across 6 URL(s)..."); dynamic_findings_count
+    # is a running tally so the count visibly grows mid-scan instead of only
+    # appearing once at COMPLETED.
+    current_dynamic_action: str | None = None
+    dynamic_findings_count: int = 0
+    target_url: str | None = None
+    scan_type: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -434,5 +930,6 @@ class ScanSummary(APIModel):
     dependency_findings: Optional[list] = None
     dependency_control_result: Optional[dict] = None
     capability_findings: Optional[list] = None
+    dynamic_probe_findings: Optional[list] = None
     dynamic_findings: Optional[list] = None
     discovered_forms: Optional[list] = None

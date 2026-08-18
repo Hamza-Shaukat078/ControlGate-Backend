@@ -9,7 +9,7 @@ import re
 import time
 import logging
 from collections import defaultdict
-from typing import List, Dict, Optional, Any
+from typing import Callable, List, Dict, Optional, Any
 from dataclasses import dataclass, asdict, field, replace
 from pathlib import Path
 
@@ -423,11 +423,18 @@ class SemanticPipeline:
     async def analyze_repository(
         self,
         repo_path: str,
-        file_paths: Optional[list[str]] = None
+        file_paths: Optional[list[str]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> AnalysisResult:
         trace_step("Pipeline: analyze_repository() (semantic_engine/pipeline.py)")
         """
         Analyze a repository with multi-file, interprocedural path discovery.
+
+        progress_callback(files_parsed, total_files, last_file_path): fired
+        from MultiFileRepositoryGraph.build()'s parse loop — see that
+        class's docstring for thread-safety notes. Optional; a large real
+        repo can spend minutes in the single build() call below with
+        nothing else visible to the caller otherwise.
         """
         start_time = time.time()
         warnings = []
@@ -439,6 +446,7 @@ class SemanticPipeline:
             repo_graph = MultiFileRepositoryGraph(
                 repo_path,
                 allowed_files=allowed if allowed else None,
+                progress_callback=progress_callback,
             )
             # build() is pure sync — run in a thread to keep event loop live.
             result = await asyncio.to_thread(repo_graph.build)
@@ -931,6 +939,16 @@ class SemanticPipeline:
         return {
             "id": vuln.slice_id,
             "type": vuln.rule_name,
+            # The machine-readable rule key ("SQL_INJECTION", not the
+            # human-readable "type" above) — this was the whole reason
+            # bridge.py's build_dynamic_targets() never matched a single
+            # static finding to a live check across any scan on record: it
+            # reads vuln.get("rule_id") or vuln.get("type"), and every
+            # finding's "type" is a human string ("SQL Injection") that
+            # never equals STATIC_TO_DYNAMIC_RULE_MAP's keys
+            # ("SQL_INJECTION"). vuln.rule_id was already computed above
+            # (all_rule_ids) and just never made it into this dict.
+            "rule_id": vuln.rule_id,
             "severity": vuln.final_severity,
             "confidence": round(vuln.final_confidence, 2),
             "cvss_score": cvss_score,

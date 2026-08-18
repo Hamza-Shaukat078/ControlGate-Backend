@@ -1,6 +1,9 @@
 """
 Capability Checker tests — the LLM-judged "is X implemented (correctly)?"
-side-channel for V6.2.2/.3/.4, V6.3.1, V6.4.1, V7.2.4, V7.4.1/.2, V14.3.1.
+side-channel for V6.2.2/.3/.4, V6.3.1, V6.4.1, V7.2.4, V7.4.1/.2, V14.3.1
+(static_code controls, sole evidence source) plus V6.6.1, V6.8.1, V7.6.2,
+V10.7.2, V11.2.2, V15.4.4 (manual_attestation controls, fail-only hybrid —
+see asvs_service.py's HYBRID_ATTESTATION_CAPABILITY_ELIGIBLE_CONTROLS).
 No real LLM calls: RoleAwareLLMPool.call is stubbed so these run offline/fast.
 """
 import json

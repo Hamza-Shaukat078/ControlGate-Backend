@@ -100,9 +100,24 @@ class FakeDB:
         self.scans = FakeCollection([{"scan_id": "scan-1", "summary": scan_summary}])
 
 
+# Mirrors MultiFileRepositoryGraph._discover_source_files's extension set
+# (app/domain/analysis/multi_file_repo_graph.py) — used only to reproduce
+# the file count a real scan_service.py run would put in total_files/
+# files_scanned (see _merge_static's "no code was ever submitted" guard),
+# since AnalysisResult itself doesn't expose a module/file count.
+_SOURCE_EXTENSIONS = {
+    ".py", ".js", ".jsx", ".ts", ".tsx",
+    ".html", ".htm", ".jinja", ".j2", ".ejs",
+    ".hbs", ".handlebars", ".mustache", ".pug",
+}
+
+
 async def _scan_and_merge(repo_path: Path) -> dict:
     pipeline = SemanticPipeline(PipelineConfig(enable_llm=False))
     result = await pipeline.analyze_repository(str(repo_path))
+    file_count = sum(
+        1 for p in repo_path.rglob("*") if p.is_file() and p.suffix in _SOURCE_EXTENSIONS
+    )
     summary = {
         "scan_id": "scan-1",
         "vulnerabilities": result.vulnerabilities,
@@ -110,6 +125,8 @@ async def _scan_and_merge(repo_path: Path) -> dict:
         "dependency_findings": result.dependency_findings,
         "dependency_control_result": result.dependency_control_result,
         "dynamic_probe_findings": [],
+        "total_files": file_count,
+        "files_scanned": file_count,
     }
     svc = ASVSService(FakeDB(summary))
     return await svc.get_compliance_summary("scan-1")

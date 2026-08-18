@@ -1,3 +1,5 @@
+from datetime import datetime
+from typing import Any
 from fastapi import APIRouter, Depends
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from sqlalchemy import select
@@ -29,9 +31,25 @@ async def summary(
 
     scans = await db.scans.find(query).to_list(length=500)
     total_scans = len(scans)
+
+    # "Open findings" means the repo's *current* state, not every scan run
+    # that ever happened — summing every historical scan would double-count
+    # the same vulnerabilities each time a repo gets re-scanned. Only the
+    # latest completed scan per target (repo, or the scan itself for
+    # repo-less direct-code scans) counts toward the total.
+    latest_completed: dict[Any, dict] = {}
+    for scan in scans:
+        if scan.get("state") != "COMPLETED":
+            continue
+        key = scan.get("repo_id") or scan.get("scan_id")
+        created = scan.get("created_at") or datetime.min
+        existing = latest_completed.get(key)
+        if existing is None or created > (existing.get("created_at") or datetime.min):
+            latest_completed[key] = scan
+
     total_vulns = 0
     severity = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-    for scan in scans:
+    for scan in latest_completed.values():
         summary = scan.get("summary") or {}
         total_vulns += summary.get("vulnerabilities_found", 0)
         by_sev = summary.get("by_severity", {})

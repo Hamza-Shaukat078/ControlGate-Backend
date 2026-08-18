@@ -29,6 +29,13 @@ client certificate or internal CA to test with, so instead of skipping them
 outright, each infers what it can from the target's TLS behavior alone and
 reports not_tested where the target genuinely doesn't give it enough to go
 on (see each check's docstring for the reasoning).
+
+Evidence convention: every pass and fail below states the concrete
+measurement or observation that produced the verdict (header values, byte
+counts, cert subject/issuer/expiry, protocol names, paths checked) — a
+reviewer reading `note` should be able to see *why* without re-running the
+probe themselves. not_tested stays a short reason (there is nothing to show
+evidence of yet).
 """
 import asyncio
 import logging
@@ -56,6 +63,29 @@ class ProbeFinding:
     verdict: str  # "pass" | "fail" | "not_tested"
     note: str
     confidence: float = 0.8
+    severity: str = "medium"
+
+
+# Severity when this control's check fails — a property of what the check
+# actually verifies, not of which branch inside it returned "fail", so it's
+# assigned once in probe() below rather than duplicated across every
+# ProbeFinding(...) call site. Reflects real-world impact: TLS/HTTPS/cert
+# weaknesses and a leaked .git directory are directly exploitable; HSTS
+# max-age is a real but narrower downgrade-attack window; HSTS preload
+# status and version disclosure are hardening/reconnaissance gaps, not
+# exploits on their own.
+_CONTROL_SEVERITY = {
+    "V12.1.1": "high",     # weak/legacy TLS protocol negotiated or accepted
+    "V12.2.2": "high",     # untrusted/invalid TLS certificate
+    "V12.2.1": "high",     # plaintext HTTP served instead of enforcing HTTPS
+    "V13.4.1": "critical", # .git/.svn metadata reachable — source code leak
+    "V3.4.1": "medium",    # HSTS missing or max-age below the 1-year minimum
+    "V12.1.3": "medium",   # mTLS client-certificate trust not enforced
+    "V12.3.4": "medium",   # internal service-to-service cert trust
+    "V3.3.5": "low",       # oversized Set-Cookie header
+    "V3.7.4": "low",       # not on the HSTS preload list (bonus hardening only)
+    "V13.4.6": "low",      # Server/X-Powered-By version disclosure (recon aid, not an exploit)
+}
 
 
 def _parse_target(target_url: str) -> tuple[str, int, str]:
@@ -88,10 +118,27 @@ class DynamicProbe:
         findings: list[ProbeFinding] = []
         for r in results:
             if isinstance(r, ProbeFinding):
+                r.severity = _CONTROL_SEVERITY.get(r.control_id, "medium")
                 findings.append(r)
             elif isinstance(r, Exception):
                 logger.warning(f"Dynamic probe check raised unexpectedly: {r}")
         return findings
+
+    @staticmethod
+    def _cert_summary(cert: dict) -> str:
+        """subject/issuer common name + expiry, for concrete cert-trust
+        evidence — same helper feeds both V12.2.2 and V12.3.4 below."""
+        def _cn(field):
+            for rdn in field or ():
+                for key, value in rdn:
+                    if key == "commonName":
+                        return value
+            return None
+
+        subject_cn = _cn(cert.get("subject")) or "unknown subject"
+        issuer_cn = _cn(cert.get("issuer")) or "unknown issuer"
+        not_after = cert.get("notAfter") or "unknown expiry"
+        return f"subject={subject_cn}, issuer={issuer_cn}, expires={not_after}"
 
     # ── V12.1.1 — TLS protocol version ───────────────────────────────────────
 
@@ -105,7 +152,11 @@ class DynamicProbe:
             return ProbeFinding("V12.1.1", "not_tested", f"Could not establish a TLS connection to {host}:{port}: {exc}", confidence=0.3)
 
         if negotiated not in ("TLSv1.3", "TLSv1.2"):
-            return ProbeFinding("V12.1.1", "fail", f"Negotiated protocol was {negotiated}, not TLS 1.2/1.3", confidence=0.85)
+            return ProbeFinding(
+                "V12.1.1", "fail",
+                f"Negotiated protocol was {negotiated}, not TLS 1.2 or 1.3 (default handshake against {host}:{port})",
+                confidence=0.85,
+            )
 
         # Bonus: confirm the server actually rejects a legacy protocol offer,
         # not just that it *supports* a modern one alongside old ones.
@@ -121,10 +172,16 @@ class DynamicProbe:
         if legacy_accepted:
             return ProbeFinding(
                 "V12.1.1", "fail",
-                f"Server negotiated {negotiated} by default but also accepted a legacy protocol offer ({legacy_accepted})",
+                f"Server negotiated {negotiated} by default, but a handshake forced to offer only TLS 1.0 "
+                f"still succeeded (negotiated {legacy_accepted}) — legacy protocol is not rejected",
                 confidence=0.8,
             )
-        return ProbeFinding("V12.1.1", "pass", f"Negotiated {negotiated}; legacy protocol offers were rejected", confidence=0.85)
+        return ProbeFinding(
+            "V12.1.1", "pass",
+            f"Negotiated {negotiated} by default; a handshake forced to offer only TLS 1.0 failed, "
+            "confirming the legacy protocol is rejected",
+            confidence=0.85,
+        )
 
     @staticmethod
     def _negotiate_tls_version(host: str, port: int, max_version: Optional["ssl.TLSVersion"]) -> Optional[str]:
@@ -142,22 +199,30 @@ class DynamicProbe:
 
     async def _check_cert_trust(self, host: str, port: int) -> ProbeFinding:
         try:
-            await asyncio.wait_for(
+            cert = await asyncio.wait_for(
                 asyncio.to_thread(self._verify_trusted_cert, host, port),
                 timeout=CONNECT_TIMEOUT_SECONDS,
             )
         except ssl.SSLCertVerificationError as exc:
-            return ProbeFinding("V12.2.2", "fail", f"Certificate is not publicly trusted: {exc}", confidence=0.9)
+            return ProbeFinding("V12.2.2", "fail", f"Certificate at {host}:{port} is not publicly trusted: {exc}", confidence=0.9)
         except Exception as exc:
             return ProbeFinding("V12.2.2", "not_tested", f"Could not verify certificate for {host}:{port}: {exc}", confidence=0.3)
-        return ProbeFinding("V12.2.2", "pass", "Certificate validated against the system trust store", confidence=0.85)
+        return ProbeFinding(
+            "V12.2.2", "pass",
+            f"Certificate validated against the system trust store — {self._cert_summary(cert)}",
+            confidence=0.85,
+        )
 
     @staticmethod
-    def _verify_trusted_cert(host: str, port: int) -> None:
+    def _verify_trusted_cert(host: str, port: int) -> dict:
         context = ssl.create_default_context()  # validates against the system CA trust store
         with socket.create_connection((host, port), timeout=CONNECT_TIMEOUT_SECONDS) as sock:
-            with context.wrap_socket(sock, server_hostname=host):
-                pass  # handshake succeeding without SSLCertVerificationError is the assertion
+            with context.wrap_socket(sock, server_hostname=host) as tls_sock:
+                # A dict form is only returned when verification succeeded
+                # (verify_mode is CERT_REQUIRED by default in a default
+                # context) — the handshake completing at all is the pass
+                # signal; this is extra detail for the evidence text.
+                return tls_sock.getpeercert() or {}
 
     # ── V12.2.1 — HTTPS enforcement ───────────────────────────────────────────
 
@@ -169,17 +234,26 @@ class DynamicProbe:
             async with httpx.AsyncClient(follow_redirects=False, timeout=HTTP_TIMEOUT_SECONDS) as client:
                 resp = await client.get(http_url)
         except (httpx.ConnectError, httpx.ConnectTimeout):
-            return ProbeFinding("V12.2.1", "pass", "Plaintext HTTP port did not accept connections", confidence=0.75)
+            return ProbeFinding("V12.2.1", "pass", f"Plaintext HTTP port did not accept connections at {http_url}", confidence=0.75)
         except Exception as exc:
             return ProbeFinding("V12.2.1", "not_tested", f"Could not probe {http_url}: {exc}", confidence=0.3)
 
         if resp.status_code in (301, 302, 307, 308):
             location = resp.headers.get("location", "")
             if location.startswith("https://"):
-                return ProbeFinding("V12.2.1", "pass", f"HTTP redirects to HTTPS ({location})", confidence=0.85)
-            return ProbeFinding("V12.2.1", "fail", f"HTTP redirect target is not HTTPS: {location}", confidence=0.7)
+                return ProbeFinding("V12.2.1", "pass", f"HTTP {resp.status_code} redirects {http_url} to HTTPS ({location})", confidence=0.85)
+            return ProbeFinding(
+                "V12.2.1", "fail",
+                f"HTTP {resp.status_code} redirect target is not HTTPS: {location or '(no Location header)'}",
+                confidence=0.7,
+            )
 
-        return ProbeFinding("V12.2.1", "fail", f"Plaintext HTTP served content directly (status {resp.status_code}) instead of redirecting to HTTPS", confidence=0.8)
+        return ProbeFinding(
+            "V12.2.1", "fail",
+            f"Plaintext HTTP served content directly (status {resp.status_code}, "
+            f"{len(resp.content)} bytes) instead of redirecting to HTTPS",
+            confidence=0.8,
+        )
 
     # ── V3.4.1 — live HSTS header ─────────────────────────────────────────────
 
@@ -192,17 +266,31 @@ class DynamicProbe:
 
         hsts = resp.headers.get("strict-transport-security")
         if not hsts:
-            return ProbeFinding("V3.4.1", "fail", "No Strict-Transport-Security header on the live response", confidence=0.8)
+            return ProbeFinding(
+                "V3.4.1", "fail",
+                f"No Strict-Transport-Security header on the live response from {base_url} "
+                f"(required: max-age >= {_ONE_YEAR_SECONDS}, ~1 year)",
+                confidence=0.8,
+            )
 
         m = re.search(r"max-age=(\d+)", hsts, re.IGNORECASE)
         if not m:
-            return ProbeFinding("V3.4.1", "fail", f"Strict-Transport-Security header present but no max-age found: {hsts}", confidence=0.6)
+            return ProbeFinding(
+                "V3.4.1", "fail",
+                f"Strict-Transport-Security header present but no max-age directive found: \"{hsts}\"",
+                confidence=0.6,
+            )
 
         seconds = int(m.group(1))
         verdict = "pass" if seconds >= _ONE_YEAR_SECONDS else "fail"
-        return ProbeFinding("V3.4.1", verdict, f"Live HSTS max-age={seconds} ({'meets' if verdict == 'pass' else 'below'} the 1-year minimum)", confidence=0.85)
+        return ProbeFinding(
+            "V3.4.1", verdict,
+            f"Live HSTS max-age={seconds} seconds ({'meets' if verdict == 'pass' else 'below'} "
+            f"the {_ONE_YEAR_SECONDS}-second / 1-year minimum) — full header: \"{hsts}\"",
+            confidence=0.85,
+        )
 
-    # ── V13.4.1 — .git / .svn exposure ────────────────────────────────────────
+    # ── V3.3.5 — Set-Cookie size ────────────────────────────────────────────
 
     async def _check_cookie_size(self, base_url: str) -> ProbeFinding:
         try:
@@ -216,21 +304,37 @@ class DynamicProbe:
             single = resp.headers.get("set-cookie")
             set_cookie_headers = [single] if single else []
         if not set_cookie_headers:
-            return ProbeFinding("V3.3.5", "not_tested", "No Set-Cookie headers observed on the live response", confidence=0.35)
+            return ProbeFinding("V3.3.5", "not_tested", f"No Set-Cookie headers observed on the response from {base_url}", confidence=0.35)
 
-        oversized = []
+        # Measure every cookie's name+value byte length — real evidence for
+        # the pass case too, not just an assertion that nothing was over the
+        # limit. Cookie *names* only, never values: a value can be a live
+        # session token and evidence text isn't a place to put that.
+        measurements = []
         for header in set_cookie_headers:
             name_value = header.split(";", 1)[0]
-            if len(name_value.encode("utf-8")) > 4096:
-                oversized.append(name_value.split("=", 1)[0])
+            name = name_value.split("=", 1)[0]
+            measurements.append((name, len(name_value.encode("utf-8"))))
 
+        oversized = [(name, size) for name, size in measurements if size > 4096]
         if oversized:
+            detail = ", ".join(f"{name} ({size} bytes)" for name, size in oversized[:5])
             return ProbeFinding(
                 "V3.3.5", "fail",
-                "Set-Cookie name+value exceeds 4096 bytes for: " + ", ".join(oversized[:5]),
+                f"Set-Cookie name+value exceeds the 4096-byte limit for: {detail}",
                 confidence=0.85,
             )
-        return ProbeFinding("V3.3.5", "pass", "All observed Set-Cookie name+value pairs are <= 4096 bytes", confidence=0.75)
+
+        detail = ", ".join(f"{name}: {size} bytes" for name, size in measurements[:8])
+        more = f" (+{len(measurements) - 8} more)" if len(measurements) > 8 else ""
+        return ProbeFinding(
+            "V3.3.5", "pass",
+            f"All {len(measurements)} observed Set-Cookie name+value pair(s) are within the 4096-byte "
+            f"limit — {detail}{more}",
+            confidence=0.75,
+        )
+
+    # ── V3.7.4 — HSTS preload list status ────────────────────────────────────
 
     async def _check_hsts_preload(self, host: str) -> ProbeFinding:
         domain = host.lower().strip(".")
@@ -242,16 +346,29 @@ class DynamicProbe:
             return ProbeFinding("V3.7.4", "not_tested", f"Could not query HSTS preload status for {domain}: {exc}", confidence=0.3)
 
         if resp.status_code != 200:
-            return ProbeFinding("V3.7.4", "not_tested", f"HSTS preload API returned HTTP {resp.status_code}", confidence=0.35)
+            return ProbeFinding("V3.7.4", "not_tested", f"HSTS preload API returned HTTP {resp.status_code} for {domain}", confidence=0.35)
 
         try:
-            status = resp.json().get("status")
+            body = resp.json()
+            status = body.get("status")
         except Exception:
             return ProbeFinding("V3.7.4", "not_tested", "HSTS preload API response was not valid JSON", confidence=0.3)
 
         if status in {"preloaded", "pending"}:
-            return ProbeFinding("V3.7.4", "pass", f"HSTS preload status is {status}", confidence=0.85)
-        return ProbeFinding("V3.7.4", "fail", f"HSTS preload status is {status or 'unknown'}", confidence=0.75)
+            return ProbeFinding(
+                "V3.7.4", "pass",
+                f"hstspreload.org reports {domain} status as \"{status}\"",
+                confidence=0.85,
+            )
+        reason = body.get("issues") or body.get("message") if isinstance(body, dict) else None
+        detail = f" — {reason}" if reason else ""
+        return ProbeFinding(
+            "V3.7.4", "fail",
+            f"hstspreload.org reports {domain} status as \"{status or 'unknown'}\" (not preloaded or pending){detail}",
+            confidence=0.75,
+        )
+
+    # ── V13.4.1 — .git / .svn exposure ────────────────────────────────────────
 
     async def _check_git_exposure(self, base_url: str) -> ProbeFinding:
         probes = [
@@ -259,6 +376,7 @@ class DynamicProbe:
             (f"{base_url}/.svn/entries", None),
             (f"{base_url}/.svn/wc.db", None),
         ]
+        checked_paths = [url for url, _ in probes]
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
                 for url, signature in probes:
@@ -267,11 +385,22 @@ class DynamicProbe:
                     except Exception:
                         continue
                     if resp.status_code == 200 and (signature is None or signature in resp.text[:200]):
-                        return ProbeFinding("V13.4.1", "fail", f"Source-control metadata reachable at {url}", confidence=0.9)
+                        snippet = resp.text[:80].replace("\n", " ")
+                        return ProbeFinding(
+                            "V13.4.1", "fail",
+                            f"Source-control metadata reachable at {url} (HTTP 200, body starts: \"{snippet}\")",
+                            confidence=0.9,
+                        )
         except Exception as exc:
             return ProbeFinding("V13.4.1", "not_tested", f"Could not probe {base_url}: {exc}", confidence=0.3)
 
-        return ProbeFinding("V13.4.1", "pass", "No .git/.svn metadata reachable at common paths", confidence=0.7)
+        return ProbeFinding(
+            "V13.4.1", "pass",
+            "Checked " + ", ".join(checked_paths) + " — none returned an HTTP 200 with source-control metadata",
+            confidence=0.7,
+        )
+
+    # ── V13.4.6 — backend version disclosure ─────────────────────────────────
 
     async def _check_version_disclosure(self, base_url: str) -> ProbeFinding:
         try:
@@ -295,7 +424,15 @@ class DynamicProbe:
                 "Live response discloses backend component version info — " + ", ".join(reasons),
                 confidence=0.75,
             )
-        return ProbeFinding("V13.4.6", "pass", "No version-revealing Server/X-Powered-By header observed", confidence=0.6)
+        # Show what *was* observed, not just the absence — a bare "Server:
+        # nginx" with no version is still worth showing as the evidence that
+        # was actually checked, same as a header that was never sent at all.
+        observed = f"Server: {server or '(not sent)'}, X-Powered-By: {x_powered_by or '(not sent)'}"
+        return ProbeFinding(
+            "V13.4.6", "pass",
+            f"No version-revealing Server/X-Powered-By header observed — {observed}",
+            confidence=0.6,
+        )
 
     # ── V12.1.3 — mTLS client-certificate trust (best-effort) ────────────────
     #
@@ -369,9 +506,9 @@ class DynamicProbe:
             )
             return ProbeFinding(
                 "V12.1.3", "not_tested",
-                "Server completed a TLS handshake without requesting a client certificate — "
-                "this endpoint does not appear to enforce mTLS, so client-certificate trust "
-                "validation could not be exercised",
+                f"Server at {host}:{port} completed a TLS handshake without requesting a client "
+                "certificate — this endpoint does not appear to enforce mTLS, so client-certificate "
+                "trust validation could not be exercised",
                 confidence=0.3,
             )
         except ssl.SSLError:
@@ -416,8 +553,9 @@ class DynamicProbe:
             except ssl.SSLError as exc:
                 return ProbeFinding(
                     "V12.1.3", "pass",
-                    f"Server required a client certificate and rejected a throwaway self-signed "
-                    f"one ({exc.__class__.__name__}), consistent with validating client-certificate trust",
+                    f"Server at {host}:{port} required a client certificate and rejected a throwaway "
+                    f"self-signed one ({exc.__class__.__name__}: {exc}), consistent with validating "
+                    "client-certificate trust",
                     confidence=0.55,
                 )
             except Exception as exc:
@@ -435,8 +573,8 @@ class DynamicProbe:
 
         return ProbeFinding(
             "V12.1.3", "fail",
-            "Server required a client certificate but accepted an untrusted throwaway "
-            "self-signed one — client-certificate identity does not appear to be validated",
+            f"Server at {host}:{port} required a client certificate but accepted an untrusted "
+            "throwaway self-signed one — client-certificate identity does not appear to be validated",
             confidence=0.6,
         )
 
@@ -452,7 +590,7 @@ class DynamicProbe:
     # not_tested rather than guessing.
     async def _check_internal_tls_cert_trust(self, host: str, port: int) -> ProbeFinding:
         try:
-            await asyncio.wait_for(
+            cert = await asyncio.wait_for(
                 asyncio.to_thread(self._verify_trusted_cert, host, port),
                 timeout=CONNECT_TIMEOUT_SECONDS,
             )
@@ -472,6 +610,7 @@ class DynamicProbe:
             )
         return ProbeFinding(
             "V12.3.4", "pass",
-            "TLS certificate validates against a trusted CA recognized by the system trust store",
+            f"TLS certificate validates against a trusted CA recognized by the system trust store "
+            f"— {self._cert_summary(cert)}",
             confidence=0.4,
         )

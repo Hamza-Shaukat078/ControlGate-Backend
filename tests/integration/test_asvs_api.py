@@ -57,12 +57,13 @@ class FakeCollection:
         self.docs = docs if docs is not None else []
 
     def find(self, *a, **kw):
-        return FakeCursor(self.docs)
+        query = a[0] if a else {}
+        return FakeCursor([d for d in self.docs if _matches(d, query or {})])
 
     async def find_one(self, query=None, sort=None):
         query = query or {}
         for d in self.docs:
-            if all(d.get(k) == v for k, v in query.items()):
+            if _matches(d, query):
                 return d
         return None
 
@@ -80,8 +81,18 @@ class FakeCollection:
     async def count_documents(self, query):
         return len([
             d for d in self.docs
-            if all(d.get(k) == v for k, v in (query or {}).items())
+            if _matches(d, query or {})
         ])
+
+
+def _matches(doc, query):
+    for key, value in query.items():
+        if isinstance(value, dict) and "$in" in value:
+            if doc.get(key) not in value["$in"]:
+                return False
+        elif doc.get(key) != value:
+            return False
+    return True
 
 
 class FakeDB:
@@ -147,34 +158,86 @@ class TestAttestationRoutes:
 
     @pytest.mark.asyncio
     async def test_submit_then_list(self):
-        db = FakeDB()
-        payload = AttestationSubmit(control_id="V2.1.1", answer=ControlVerdict.PASS, evidence_url="https://example.com/doc.pdf")
+        db = FakeDB(scans=[{"scan_id": "scan-1", "user_id": "user-1", "summary": {}}])
+        payload = AttestationSubmit(
+            control_id="V2.1.1",
+            scan_id="scan-1",
+            answer=ControlVerdict.PASS,
+            evidence_url="https://example.com/doc.pdf",
+        )
         submitted = await attestations_routes.submit_attestation(payload, user=FAKE_USER, db=db)
         assert submitted["control_id"] == "V2.1.1"
+        assert submitted["scan_id"] == "scan-1"
         assert submitted["attested_by"] == "Test User"
 
-        listed = await attestations_routes.list_attestations(user=FAKE_USER, db=db)
+        listed = await attestations_routes.list_attestations(scan_id="scan-1", user=FAKE_USER, db=db)
         assert "V2.1.1" in listed
 
     @pytest.mark.asyncio
     async def test_resubmit_overwrites_previous_answer_not_duplicates(self):
-        db = FakeDB()
+        db = FakeDB(scans=[{"scan_id": "scan-1", "user_id": "user-1", "summary": {}}])
         await attestations_routes.submit_attestation(
-            AttestationSubmit(control_id="V2.1.1", answer=ControlVerdict.FAIL), user=FAKE_USER, db=db,
+            AttestationSubmit(
+                control_id="V2.1.1",
+                scan_id="scan-1",
+                answer=ControlVerdict.FAIL,
+                evidence_notes="Reviewed scan scope and found compensating control missing.",
+            ),
+            user=FAKE_USER,
+            db=db,
         )
         await attestations_routes.submit_attestation(
-            AttestationSubmit(control_id="V2.1.1", answer=ControlVerdict.PASS), user=FAKE_USER, db=db,
+            AttestationSubmit(
+                control_id="V2.1.1",
+                scan_id="scan-1",
+                answer=ControlVerdict.PASS,
+                evidence_notes="Reviewed implementation for this scan and verified the control.",
+            ),
+            user=FAKE_USER,
+            db=db,
         )
-        listed = await attestations_routes.list_attestations(user=FAKE_USER, db=db)
+        listed = await attestations_routes.list_attestations(scan_id="scan-1", user=FAKE_USER, db=db)
         assert len(listed) == 1
         assert listed["V2.1.1"]["answer"] == "pass"
 
     @pytest.mark.asyncio
-    async def test_upload_evidence_returns_url(self, tmp_path, monkeypatch):
+    async def test_submit_requires_scan_and_proof(self):
+        db = FakeDB(scans=[{"scan_id": "scan-1", "user_id": "user-1", "summary": {}}])
+        with pytest.raises(HTTPException) as exc_info:
+            await attestations_routes.submit_attestation(
+                AttestationSubmit(control_id="V2.1.1", scan_id="scan-1", answer=ControlVerdict.PASS),
+                user=FAKE_USER,
+                db=db,
+            )
+        assert exc_info.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_upload_scan_evidence_returns_url(self, tmp_path, monkeypatch):
         from app.core.config import settings
         monkeypatch.setattr(settings, "ATTESTATION_EVIDENCE_DIR", str(tmp_path))
 
+        db = FakeDB(scans=[{"scan_id": "scan-1", "user_id": "user-1", "summary": {}}])
         upload = UploadFile(filename="evidence.txt", file=BytesIO(b"hello world"))
-        result = await attestations_routes.upload_evidence("V2.1.1", file=upload, user=FAKE_USER, db=FakeDB())
-        assert result["evidence_url"].startswith("/attestations/V2.1.1/evidence/")
-        assert (tmp_path / FAKE_USER["id"] / "V2.1.1").exists()
+        result = await attestations_routes.upload_scan_evidence(
+            "scan-1", "V2.1.1", file=upload, user=FAKE_USER, db=db
+        )
+        assert result["evidence_url"].startswith("/attestations/scan/scan-1/V2.1.1/evidence/")
+        assert (tmp_path / FAKE_USER["id"] / "scan-1" / "V2.1.1").exists()
+
+    @pytest.mark.asyncio
+    async def test_upload_scan_evidence_requires_authorized_scan(self):
+        db = FakeDB(scans=[{"scan_id": "scan-1", "user_id": "someone-else", "summary": {}}])
+        upload = UploadFile(filename="evidence.txt", file=BytesIO(b"hello world"))
+        with pytest.raises(HTTPException) as exc_info:
+            await attestations_routes.upload_scan_evidence(
+                "scan-1", "V2.1.1", file=upload, user=FAKE_USER, db=db
+            )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_scan_attestation_tasks_are_scan_scoped(self):
+        db = FakeDB(scans=[{"scan_id": "scan-1", "user_id": "user-1", "summary": {}}])
+        result = await attestations_routes.list_scan_attestation_tasks("scan-1", user=FAKE_USER, db=db)
+        assert result["scan_id"] == "scan-1"
+        assert result["counts"]["total"] > 0
+        assert result["process"]["required_proof"]

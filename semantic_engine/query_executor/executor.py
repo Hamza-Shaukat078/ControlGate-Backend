@@ -17,6 +17,55 @@ from semantic_engine.query_store.loader import QueryRule
 
 logger = logging.getLogger(__name__)
 
+# A bind-params array as a subsequent argument to the same call — the
+# `pool.query(text, params)` / `client.query('...$1...', [id])` shape every
+# mainstream Node SQL driver (pg, mysql2, better-sqlite3) and query builder
+# (knex) uses for parameterized queries. Deliberately permissive about
+# whitespace/newlines between the comma and the bracket — the real false
+# positive this was built against split the array onto its own line a few
+# lines below the call:
+#   const result = await query(
+#     'SELECT ... WHERE email = $1',
+#     [email]
+#   );
+# Module-level (not a QueryExecutor method) so path_discovery.py's separate
+# "unclassified data-flow" pipeline can reuse it too — the exact same
+# `req -> query` false positive shows up there under the generic
+# PATH_DISCOVERY identity whenever the taint path's source label doesn't
+# happen to match SQL_INJECTION's own declared source patterns closely
+# enough to be attributed to it directly (see path_discovery.py's
+# _attribute_rule), which doesn't make the underlying call any less safe.
+_PARAMETERIZED_QUERY_ARG_RE = re.compile(r",\s*\[")
+
+# Sink labels a "this reaches a DB query call" taint path can be recognized
+# by, independent of which rule_id (if any) it ends up attributed to —
+# reuses SQL_INJECTION's own sink vocabulary from queries.json rather than
+# a separate list to keep in sync.
+_DB_QUERY_SINK_TOKENS = (
+    "query", "execute", "executemany", "raw",
+)
+
+
+def sink_call_is_parameterized_query(sink_node: GraphNode, file_source: str) -> bool:
+    """Best-effort, same weight class as the rest of this module — reads the
+    sink's own call site (its line plus a few following, to cover a
+    multi-line call) and checks for a literal array as a later argument. Not
+    real argument-position parsing (this graph has none), just a structural
+    signal specific to the flagged call site rather than a whole-file
+    keyword, so it's confident enough to suppress the finding outright
+    rather than only downgrade it."""
+    if not sink_node.line or not file_source:
+        return False
+    lines = file_source.split("\n")
+    start = max(0, sink_node.line - 1)
+    window = "\n".join(lines[start:start + 6])
+    return bool(_PARAMETERIZED_QUERY_ARG_RE.search(window))
+
+
+def sink_looks_like_db_query_call(sink_node: GraphNode) -> bool:
+    label = (sink_node.name or sink_node.id or "").lower()
+    return any(token in label for token in _DB_QUERY_SINK_TOKENS)
+
 
 @dataclass
 class CodeSlice:
@@ -203,6 +252,27 @@ class QueryExecutor:
                 try:
                     for match in re.finditer(pattern, code):
                         line_num = code[:match.start()].count("\n") + 1
+
+                        # INPUT_VALIDATION_MISSING's sinks are "req.body/query/
+                        # params accessed without a schema validator (pydantic,
+                        # joi, ...) in the same file" — but a request value being
+                        # *reassigned through a sanitizing .replace(...) call* is
+                        # itself a validation/sanitization step, not "used without
+                        # validation". Without this, the sanitizeRequest()
+                        # middleware in security.js — the file that IS the
+                        # sanitization layer — flagged its own
+                        # `req.query[key] = req.query[key].replace(/[<>]/g, '')`
+                        # line as the very thing it exists to prevent. Confirmed
+                        # false positive against a real scan. Checked as a plain
+                        # substring on a tiny fixed-size line window (not a regex
+                        # lookahead) — no ReDoS exposure, unlike the inline
+                        # lookahead approach documented as dangerous in
+                        # test_redos_regex_patterns.py.
+                        if query.rule_id == "INPUT_VALIDATION_MISSING":
+                            window = "\n".join(lines[max(0, line_num - 1):line_num + 1])
+                            if ".replace(" in window:
+                                continue
+
                         snippet = self._extract_code_snippet(code, {line_num}, context=regex_context)
                         slice_id = f"{query.rule_id}_REGEX_{file_path}_{line_num}"
 
@@ -365,17 +435,61 @@ class QueryExecutor:
         if pattern in ['execute', 'query'] and node.type == NodeType.CALL_EXPRESSION:
             return self._label_matches_pattern(label_lower, pattern_lower)
         
-        # Check value field if available.
-        if hasattr(node, 'value') and node.value:
-            if pattern_lower in str(node.value).lower():
+        # Check value field if available — but only for node types where
+        # `.value` genuinely holds a short, semantic identity (a dict/array
+        # key name), never for types where `.value` is just the node's own
+        # raw source-code snippet.
+        #
+        # Bug fix #1 — this used to be a naive `pattern_lower in
+        # str(node.value)` substring check, bypassing the token-aware
+        # matcher above it entirely: SSRF's source list includes bare "url"
+        # (meant to catch request-derived values like `req.query.url`), and
+        # a plain substring check treats "URL" as present inside "API_URL"
+        # or "PRODUCT_SERVICE_URL" — hardcoded environment-config constants
+        # (docker-compose service-discovery URLs), never user input.
+        # Confirmed false positive against a real scan on exactly those two
+        # identifiers.
+        #
+        # Bug fix #2 — switching to a token-aware check wasn't enough on its
+        # own. It was first scoped as "every node type except LITERAL", but
+        # CALL_EXPRESSION/MEMBER_ACCESS nodes store their *entire source
+        # snippet* in `.value` (e.g. `res.json({ message: 'Password changed
+        # successfully' })`), so a source pattern as ordinary as "password"
+        # still matched as a whole word inside plain English response-message
+        # prose that has nothing to do with an actual credential, tainting
+        # the res.json() call itself as a "source". Confirmed false positive
+        # against a real scan (SENSITIVE_DATA_EXPOSURE flagging a bare
+        # `{success: true, message: 'Password changed successfully'}`
+        # response). Rather than deny-list every node type whose `.value`
+        # happens to be raw source text, this now allow-lists SUBSCRIPT —
+        # the one case this fallback was actually built for (a dict/array
+        # key access like `data['url']`, where node.value IS the key name
+        # itself, not a source-text dump).
+        # Fully-qualified (dotted) patterns like "request.files" are exempt
+        # from the SUBSCRIPT restriction above: _label_matches_pattern takes
+        # the exact-substring branch for these (same "." check as line 530),
+        # not the bare-token branch "password"/"url" needed guarding against
+        # — so checking them against a wider set of node types (assignments,
+        # call expressions) can't reintroduce the prose/env-var false
+        # positives Bug fix #2 exists for. Needed for e.g.
+        # `f = request.files["file"]`: the ASSIGNMENT node's raw value
+        # contains "request.files" and is the only node with real DFG
+        # connectivity to a downstream sink — the MEMBER_ACCESS node for
+        # `request.files` itself is a dead end (nothing flows out of it in
+        # the graph). Confirmed regression: UNRESTRICTED_FILE_UPLOAD went
+        # from detecting this exact fixture to missing it entirely once the
+        # SUBSCRIPT restriction landed.
+        is_qualified_pattern = any(ch in pattern_lower for ch in [".", "(", ")", "'", "\""])
+        if (node.type == NodeType.SUBSCRIPT or is_qualified_pattern) and hasattr(node, 'value') and node.value:
+            if self._label_matches_pattern(str(node.value).lower(), pattern_lower):
                 return True
-        
+
         # Check metadata if available.
         if hasattr(node, 'metadata') and node.metadata:
             metadata_str = str(node.metadata).lower()
             if pattern_lower in metadata_str:
                 return True
-        
+
         return False
 
     def _matches_sink_pattern(self, node: GraphNode, pattern: str) -> bool:
@@ -707,12 +821,33 @@ class QueryExecutor:
             "end_line": max_line
         }
         
+        # Bug fix — SQL_INJECTION's sinks (pool.query, db.query, cursor.execute,
+        # ...) match on call NAME alone, with no argument-position awareness at
+        # all (see _matches_sink_pattern) — a taint path reaching the *second*
+        # argument of `pool.query(text, params)` was flagged identically to one
+        # reaching the query-string argument itself, even though the second
+        # argument is exactly what makes a parameterized call safe (the driver
+        # binds it out-of-band, never string-interpolating it into SQL text).
+        # Confirmed false positive against a real scan: both flagged findings
+        # were `query('SELECT ... WHERE email = $1', [email])`-shaped calls,
+        # textbook-correct parameterization. The whole-file `sanitizers`
+        # keyword list already existing above (line ~711) only fires if the
+        # literal word "parameterized" (etc.) appears somewhere in the file —
+        # it doesn't, in idiomatic pg/mysql2/knex code, so it never caught
+        # this. This checks the sink call's own source lines directly instead:
+        # a bind-params array (`, [...]`) as a subsequent argument to the same
+        # call is strong, call-site-specific evidence of parameterization,
+        # not just a nearby keyword — worth suppressing the finding outright
+        # rather than only downgrading it, for this rule specifically.
+        if query.rule_id == "SQL_INJECTION" and self._sink_call_is_parameterized(sink_node, file_source):
+            return None
+
         # Generate reason string, include sanitizer evidence.
         sanitizer_hits = self._count_sanitizers_in_path(path, graph, set(query.sanitizers))
         reason = self._generate_reason(source_node, sink_node, query, pattern_type)
         if sanitizer_hits:
             reason += f" Sanitizers observed: {sanitizer_hits}."
-        
+
         # Create slice payload.
         slice_id = f"{query.rule_id}_{source_node.id}_{sink_node.id}"
         
@@ -759,6 +894,9 @@ class QueryExecutor:
                 hits += 1
         return hits
     
+    def _sink_call_is_parameterized(self, sink_node: GraphNode, file_source: str) -> bool:
+        return sink_call_is_parameterized_query(sink_node, file_source)
+
     def _extract_code_snippet(
         self, source_code: str, line_numbers: Set[int], context: int = 3
     ) -> str:

@@ -20,7 +20,7 @@ Architecture:
 5. MultiFileDFG - Extends interprocedural DFG across files
 """
 
-from typing import Dict, List, Set, Optional, Tuple, Any
+from typing import Callable, Dict, List, Set, Optional, Tuple, Any
 from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
@@ -1409,9 +1409,20 @@ class MultiFileRepositoryGraph:
         repo_path: str,
         exclude_patterns: Optional[List[str]] = None,
         allowed_files: Optional[set] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ):
         self.repo_path = repo_path
         self.allowed_files = allowed_files  # repo-relative paths (forward slashes)
+        # Optional (files_parsed, total_files, last_file_path) callback, fired
+        # from build()'s parse loop — always called from the same thread that
+        # called build() (ThreadPoolExecutor.as_completed() runs in the
+        # caller's thread, individual _parse_file() workers don't call this),
+        # so a plain sync callable is safe with no locking of its own needed.
+        # Real-repo scans (e.g. a full clone of a large JS/TS monorepo) can
+        # spend minutes here with nothing else visible to the caller — this
+        # is what lets scan_service.py report "N/M files parsed" instead of
+        # looking hung.
+        self.progress_callback = progress_callback
         self.scanner = RepositoryScanner(repo_path, exclude_patterns)
         self.symbol_table = GlobalSymbolTable()
         self.cpg_parser = CPGParser()
@@ -1466,6 +1477,11 @@ class MultiFileRepositoryGraph:
                     print(f"  [WARN] Failed parsing {file_path}: {exc}")
                 if i % 10 == 0 or i == len(code_files):
                     print(f"  Progress: {i}/{len(code_files)} files")
+                if self.progress_callback:
+                    try:
+                        self.progress_callback(i, len(code_files), str(file_path))
+                    except Exception:
+                        pass  # a broken/slow caller-supplied callback must never break parsing itself
         
         print(f"  Parsed {len(self.symbol_table.modules)} modules")
 

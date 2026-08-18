@@ -1,5 +1,8 @@
 from datetime import datetime
+from enum import Enum
 from typing import Optional
+
+from pydantic import Field
 
 from app.enums.asvs import ASVSLevel, ControlVerdict, EvidenceSource
 from app.schemas.common import APIModel
@@ -62,11 +65,26 @@ class AttestationRecord(APIModel):
     scan_id: Optional[str] = None
     answer: ControlVerdict
     evidence_url: Optional[str] = None
+    evidence_notes: Optional[str] = None
+    proof_type: Optional[str] = None
     attested_by: Optional[str] = None
     timestamp: datetime
 
 
+class AttestationProofType(str, Enum):
+    DOCUMENT = "document"
+    SCREENSHOT = "screenshot"
+    TEST_RESULT = "test_result"
+    TICKET = "ticket"
+    CODE_REVIEW = "code_review"
+    COMPENSATING_CONTROL = "compensating_control"
+    OTHER = "other"
+
+
 class AttestationSubmit(APIModel):
     control_id: str
+    scan_id: Optional[str] = None
     answer: ControlVerdict
     evidence_url: Optional[str] = None
+    evidence_notes: Optional[str] = Field(None, max_length=4000)
+    proof_type: Optional[AttestationProofType] = None

@@ -7,6 +7,7 @@ load_dotenv(dotenv_path=_env_path)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from app.core.config import settings
 from app.api.api_v1 import api_router
@@ -16,6 +17,14 @@ from app.db.seed_asvs import seed_asvs_controls
 
 
 app = FastAPI(title=settings.PROJECT_NAME)
+
+# The ASVS catalog, portfolio dashboard and scan summaries are large, highly
+# repetitive JSON documents (~280 controls, per-control results, code
+# snippets). Gzipping them cuts the transfer by roughly an order of magnitude,
+# which is the single biggest win for how fast the dashboard paints on a
+# non-local connection. Responses under 1 KB are left uncompressed — below
+# that the header overhead costs more than it saves.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,

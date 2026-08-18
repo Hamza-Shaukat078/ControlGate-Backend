@@ -99,6 +99,38 @@ class TestSQLInjectionPatterns:
         assert not matches_any(pats, code)
 
 
+class TestDefaultCredentialsPatterns:
+    """Regression — pattern 2 used to allow admin|root as BOTH the bare key
+    and the value, matching a role-enum constant like `ADMIN: 'ADMIN'`
+    (confirmed false positive against a real scan: services/shared/
+    middleware/rbac.js's `export const ROLES = { ADMIN: 'ADMIN', ... }`)
+    just as readily as a real default credential. 'admin'/'root' are
+    legitimate role/level names; 'password'/'1234'/'123456' never are —
+    narrowed the bare-key pattern's allowed values accordingly."""
+
+    RULE = "DEFAULT_CREDENTIALS"
+
+    def test_role_enum_constant_not_detected(self):
+        code = "export const ROLES = { ADMIN: 'ADMIN', SELLER: 'SELLER', BUYER: 'BUYER' };"
+        pats = get_patterns(self.RULE)
+        assert not matches_any(pats, code)
+
+    def test_bare_key_with_password_value_still_detected(self):
+        code = 'admin = "password"'
+        pats = get_patterns(self.RULE)
+        assert matches_any(pats, code)
+
+    def test_quoted_json_admin_admin_still_detected(self):
+        code = '"admin": "admin"'
+        pats = get_patterns(self.RULE)
+        assert matches_any(pats, code)
+
+    def test_password_suffixed_key_still_detected(self):
+        code = 'admin_password = "admin"'
+        pats = get_patterns(self.RULE)
+        assert matches_any(pats, code)
+
+
 # ── Command Injection ─────────────────────────────────────────────────────────
 
 class TestCommandInjectionPatterns:
@@ -426,6 +458,40 @@ class TestRefreshTokenNoExpiryPatterns:
 
     def test_refresh_token_with_expiry_not_detected(self):
         code = "create_refresh_token(user_id=user.id, expires_in=2592000)"
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_new_refresh_token_without_expiry_still_detected(self):
+        code = "const rt = new RefreshToken(token, user);"
+        assert matches_any(get_patterns(self.RULE), code)
+
+    def test_new_refresh_token_with_expiry_not_detected(self):
+        code = "const rt = new RefreshToken(token, user, expiresAt);"
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_validate_refresh_token_function_not_detected(self):
+        # Regression — the bare "RefreshToken\s*\(" pattern (no word
+        # boundary / constructor anchor) used to match the *suffix* of any
+        # function whose name happened to end in "RefreshToken", regardless
+        # of what the function actually does. validateRefreshToken doesn't
+        # create anything — it checks an existing token. Confirmed false
+        # positive against a real scan.
+        code = "async function validateRefreshToken(userId, token) {\n  const tokenHash = hash(token);\n}"
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_revoke_refresh_token_function_not_detected(self):
+        code = "async function revokeRefreshToken(userId, token) {\n  const tokenHash = hash(token);\n}"
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_verify_refresh_token_function_not_detected(self):
+        code = "export function verifyRefreshToken(token) {\n  return jwt.verify(token, SECRET);\n}"
+        assert not matches_any(get_patterns(self.RULE), code)
+
+    def test_store_refresh_token_call_site_not_detected(self):
+        # storeRefreshToken's own implementation sets a real 7-day expiry
+        # internally (confirmed against the real scan's source) — a regex
+        # can't see that from the call site, which is exactly why this
+        # bare-name pattern was the wrong tool for testing it at all.
+        code = "await userModel.storeRefreshToken(user.id, refreshToken);"
         assert not matches_any(get_patterns(self.RULE), code)
 
 
@@ -1981,3 +2047,44 @@ class TestUnvalidatedBusinessLogicValuePatterns:
             re.search(pattern, code)
             elapsed = time.perf_counter() - start
             assert elapsed < 1.0, f"{self.RULE} pattern took {elapsed:.2f}s — ReDoS regression: {pattern!r}"
+
+
+class TestAdminRouteUnprotectedPatterns:
+    """Regression — the regex's own lazy `[^)]*?/admin` stops matching the
+    instant it finds "/admin" in the path string; it never had any
+    component checking the REST of the call's arguments for an auth guard,
+    despite the rule's description promising exactly that ("without
+    explicit auth guard in the same line"). Confirmed false positive
+    against a real scan: a route with `authenticate, authorize(ROLES.ADMIN)`
+    literally in the same call still fired. Per test_redos_regex_patterns.py's
+    documented history, an inline lookahead is NOT the fix here (caused a
+    real ReDoS timeout previously) — uses the same whole-file `sanitizers`
+    substring-check downgrade every other rule in this position uses.
+    """
+
+    RULE = "ADMIN_ROUTE_UNPROTECTED"
+
+    def test_unguarded_admin_route_detected(self):
+        code = "router.get('/admin/users', adminController.listUsers);"
+        assert matches_any(get_patterns(self.RULE), code)
+        assert not sanitizer_present(self.RULE, code)
+
+    def test_guarded_admin_route_still_fires_but_downgradeable(self):
+        # The regex can't safely suppress this inline (see class docstring
+        # above) — it still matches, but the whole-file sanitizer check
+        # picks up the guard and the caller downgrades confidence/severity.
+        code = "router.get('/all/admin', authenticate, authorize(ROLES.ADMIN), orderController.getAllOrders);"
+        assert matches_any(get_patterns(self.RULE), code)
+        assert sanitizer_present(self.RULE, code)
+
+    def test_login_required_decorator_elsewhere_in_file_downgradeable(self):
+        code = (
+            "@login_required\n"
+            "def other_view(request):\n"
+            "    pass\n\n"
+            "@app.route('/admin/dashboard')\n"
+            "def admin_dashboard(request):\n"
+            "    pass\n"
+        )
+        assert matches_any(get_patterns(self.RULE), code)
+        assert sanitizer_present(self.RULE, code)
