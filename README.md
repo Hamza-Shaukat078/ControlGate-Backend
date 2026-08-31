@@ -7,17 +7,19 @@ repositories and optional live targets, correlates automated evidence with
 manual attestations, and produces actionable compliance results for the
 ControlGate frontend.
 
-The ASVS engine verifies a target codebase against the **70 OWASP ASVS 5.0.0
-Level 1 requirements**, combining four independent detection modules into a
-single per-control pass/fail/manual-review verdict:
+The ASVS engine verifies a target codebase against the **full OWASP ASVS
+5.0.0 catalog - all 3 verification levels (L1/L2/L3), 345 controls across
+17 chapters** (`app/data/asvs_l1_controls.json`, `asvs_l2_controls.json`,
+`asvs_l3_controls.json`), combining five independent detection modules into
+a single per-control pass/fail/manual-review verdict:
 
 | Detection module | Controls | What it checks |
 |---|---|---|
-| Taint engine + rule catalog (`semantic_engine/`, `queries/queries.json`) | 50 | AST/CFG/DFG static analysis and an 88-rule pattern catalog - injection, crypto, session/JWT handling, password policy, access control, etc. |
-| Config Inspector (`app/domain/analysis/config_inspector.py`) | 5 | Parses `.env`, YAML, Dockerfile, and nginx/reverse-proxy config for HSTS, cookie flags, upload limits, charset, script-execution exposure |
+| Taint engine + rule catalog (`semantic_engine/`, `queries/queries.json`) | 195 | AST/CFG/DFG static analysis and an 88-rule pattern catalog - injection, crypto, session/JWT handling, password policy, access control, etc. |
+| Manual Attestation (`app/api/routes/attestations.py`) | 109 | Human-submitted answers for architecture/business-logic/documentation controls with no automatable signal, many cross-checked against live DAST findings via the hybrid-attestation bridge |
+| Config Inspector (`app/domain/analysis/config_inspector.py`) | 32 | Parses `.env`, YAML, Dockerfile, and nginx/reverse-proxy config for HSTS, cookie flags, upload limits, charset, script-execution exposure |
+| Dynamic Probe (`app/domain/analysis/dynamic_probe.py` + `app/domain/analysis/dast/`) | 8 tagged (broader live-DAST coverage feeds into hybrid-attestation controls above) | Opt-in, live checks against a deployed URL/session: TLS/HSTS/cert trust, SSRF (out-of-band collaborator confirmation), IDOR/BOLA, mass assignment, race conditions, JWT alg-confusion forgery, DOM-XSS, stored-XSS, reflected-XSS, redirect warnings, request smuggling, timing side-channels, WebRTC (DTLS/SRTP), signaling-server WebSocket fuzzing, padding-oracle, plus target discovery via a same-origin crawler, headless-browser (Chromium) crawling for JS-rendered SPAs, and OpenAPI/Swagger spec-driven discovery for API-only targets |
 | Dependency Scanner (`app/services/dependency_scanner.py`) | 1 | Parses manifests/lockfiles (requirements.txt, package.json, package-lock.json, Pipfile.lock, pyproject.toml) and queries the OSV.dev API against a documented remediation SLA |
-| Dynamic Probe (`app/domain/analysis/dynamic_probe.py`) | 4 | Opt-in, live checks against a deployed URL: TLS version, HTTPS enforcement, certificate trust, live HSTS header, `.git`/`.svn` exposure |
-| Manual Attestation (`app/api/routes/attestations.py`) | 10 | Human-submitted answers for architecture/business-logic/documentation controls with no automatable signal |
 
 `app/services/asvs_service.py` merges all five sources into one
 `ASVSControlResult` per control and aggregates them into the compliance
@@ -70,9 +72,10 @@ docker compose up -d mongo
 uvicorn app.main:app --reload
 ```
 
-Open http://127.0.0.1:8000/docs. On startup the app seeds the 70-control
-ASVS catalog into the `asvs_controls` collection automatically
-(`app/db/seed_asvs.py`, sourced from `app/data/asvs_l1_controls.json`).
+Open http://127.0.0.1:8000/docs. On startup the app seeds the full 345-control
+ASVS catalog (L1+L2+L3) into the `asvs_controls` collection automatically
+(`app/db/seed_asvs.py`, sourced from `app/data/asvs_l1_controls.json`,
+`asvs_l2_controls.json`, `asvs_l3_controls.json`).
 
 Default Credentials
 -------------------
@@ -89,14 +92,17 @@ API Base Path
 Implemented Modules
 -------------------
 
-- **Auth**: register, login, logout, me, refresh (JWT bearer), OAuth (Google/GitHub)
-- **Dashboard**: summary, recent scans, notifications
-- **Repositories**: CRUD, branches, upload (ZIP/TAR up to 200MB)
-- **Scans**: start (optionally with a live `target_url` to enable the Dynamic Probe), status, logs, summary, cancel
-- **Graphs**: real AST/CFG/DFG/CPG evidence viewer, backed by the taint engine
-- **ASVS Catalog** (`/asvs/*`): list controls, list chapters, get one control + its latest scan result
-- **Attestations** (`/attestations`): submit/list manual attestation answers, upload evidence files
-- **Reports**: list/get/export (JSON/CSV/SARIF/PDF), `/reports/{scan_id}/compliance?framework=asvs`, `/export/asvs-report` (PDF)
+- **Auth** (`/auth`): register, login/logout (httpOnly cookie + JWT bearer), me, refresh, OAuth (Google/GitHub), forgot/reset-password
+- **Dashboard** (`/dashboard`): summary, recent scans, notifications
+- **Repositories** (`/repositories`): CRUD, branches, file listing, upload (ZIP/TAR up to 200MB, zip-slip/symlink-safe extraction)
+- **Scans** (`/scans`): start (optionally with a live `target_url` to enable the Dynamic Probe + full DAST engine), `/ws/{scan_id}` WebSocket progress stream, status, logs, summary, cancel, list, delete, `/diff-files` (changed-files-only scan input from two git refs), `/discover-probes` (auto-discovers IDOR/mass-assignment probe candidates before a real scan runs)
+- **Legacy direct-scan endpoint** (`/scan`, singular - `app/api/routes/scan.py`): standalone code-snippet scan + `/scan/demo` + `/scan/health`, predates the `/scans` workflow above; kept for direct/ad-hoc use, not part of the repo-based ASVS flow
+- **Graphs** (`/graphs`): real AST/CFG/DFG/CPG evidence viewer, backed by the taint engine
+- **ASVS Catalog** (`/asvs`): list controls, list chapters, get one control + its latest scan result, `/asvs/portfolio` cross-repo compliance dashboard (latest snapshot + trend per repo, portfolio-wide attestation coverage, controls failing across the most repos)
+- **Attestations** (`/attestations`): scan-scoped manual-attestation work queue (`GET /attestations/scan/{scan_id}`), submit/list answers, upload evidence files - proof (evidence URL or notes) is mandatory on every submission
+- **Reports** (`/reports`): list/get/export (JSON/CSV/SARIF/PDF), `/reports/{scan_id}/compliance?framework=asvs`, `/reports/compare` (diff two scan reports)
+- **Export** (`/export/asvs-report`): ASVS compliance report as PDF
+- **Admin** (`/admin`, admin role only): list users, change a user's role
 
 Out of scope (removed): patch generation, sandbox/exploit execution, attack
 surface mapping, kill-chain/MITRE mapping, benchmark/leaderboard tooling, and
