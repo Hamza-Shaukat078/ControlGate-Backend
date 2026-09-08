@@ -19,7 +19,7 @@ async def list_controls(
     user=Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),
 ):
-    """List the full ASVS 5.0.0 L1 control catalog (70 controls)."""
+    """List the full ASVS 5.0.0 control catalog (345 controls, Levels 1-3)."""
     service = ASVSService(db)
     return await service.list_controls()
 
@@ -29,7 +29,7 @@ async def list_chapters(
     user=Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),
 ):
-    """List the 15 ASVS chapters represented in the catalog, with control counts."""
+    """List the 17 ASVS chapters represented in the catalog, with control counts."""
     service = ASVSService(db)
     return await service.list_chapters()
 
@@ -78,6 +78,10 @@ async def get_portfolio_dashboard(
             })
 
     portfolio["repos"].sort(key=lambda r: (r["l1_pct"] is None, r["l1_pct"] if r["l1_pct"] is not None else 0))
+    # get_portfolio_dashboard() set this to the *scanned*-repo count before
+    # the never-scanned repos above were appended — re-sync it now so the
+    # dashboard's "Repositories" total matches the list actually returned.
+    portfolio["repo_count"] = len(portfolio["repos"])
     return portfolio
 
 
