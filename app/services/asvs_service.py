@@ -34,6 +34,7 @@ import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Optional
 from xml.sax.saxutils import escape as _xml_escape
 
@@ -51,7 +52,7 @@ try:
     from reportlab.lib.units import inch
     from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
     from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether, Preformatted, Flowable,
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether, Preformatted, Flowable, Image,
     )
     from reportlab.lib import colors
     REPORTLAB_AVAILABLE = True
@@ -473,44 +474,18 @@ _VERDICT_HEX = {
 }
 
 
+_LOGO_ICON_PATH = Path(__file__).resolve().parent.parent / "assets" / "logo-icon.png"
+
 if REPORTLAB_AVAILABLE:
-    class _ControlGateLogo(Flowable):
-        """ReportLab vector version of frontend/public/logo.svg."""
-
-        def __init__(self, size: float = 76):
-            super().__init__()
-            self.width = size
-            self.height = size
-            self.hAlign = "CENTER"
-
-        def draw(self):
-            scale = self.width / 100
-
-            def xy(x: float, y: float) -> tuple[float, float]:
-                return x * scale, (100 - y) * scale
-
-            c = self.canv
-            c.saveState()
-
-            shield = c.beginPath()
-            shield.moveTo(*xy(50, 6))
-            shield.curveTo(*xy(66, 6), *xy(82, 12), *xy(82, 12))
-            shield.lineTo(*xy(82, 46))
-            shield.curveTo(*xy(82, 72), *xy(68, 88), *xy(50, 96))
-            shield.curveTo(*xy(32, 88), *xy(18, 72), *xy(18, 46))
-            shield.lineTo(*xy(18, 12))
-            shield.curveTo(*xy(18, 12), *xy(34, 6), *xy(50, 6))
-            shield.close()
-            c.setFillColor(colors.HexColor("#2563eb"))
-            c.drawPath(shield, stroke=0, fill=1)
-
-            c.setStrokeColor(colors.white)
-            c.setLineWidth(8 * scale)
-            c.setLineCap(1)
-            c.setLineJoin(1)
-            c.line(*xy(32, 50), *xy(45, 63))
-            c.line(*xy(45, 63), *xy(70, 34))
-            c.restoreState()
+    def _control_gate_logo(size: float = 76) -> Flowable:
+        """The official ControlGate mark (app/assets/logo-icon.png — a square
+        crop of frontend/public/logo.png's icon glyph, transparent background)
+        for the PDF cover page. A plain reportlab Image, not a hand-drawn
+        vector shape — the mark itself is the source of truth now, not a
+        redrawn approximation of it."""
+        img = Image(str(_LOGO_ICON_PATH), width=size, height=size)
+        img.hAlign = "CENTER"
+        return img
 
 _report_pool: Optional["RoleAwareLLMPool"] = None
 
@@ -2041,7 +2016,7 @@ class ASVSService:
         target_line = f"Target: {target_label}" + (f"  |  Branch: {_pdf_text(branch)}" if branch else "")
         story = [
             Spacer(1, 0.45 * inch),
-            _ControlGateLogo(82),
+            _control_gate_logo(82),
             Spacer(1, 0.18 * inch),
             Paragraph("ControlGate", cover_app_style),
             Paragraph("APPLICATION SECURITY AND COMPLIANCE ASSURANCE", cover_kicker_style),
